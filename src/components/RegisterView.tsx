@@ -5,8 +5,9 @@ import {
   savePortalConfig,
   validatePortalAddress,
 } from '../services/workflowStore';
+import { isFirebaseConfigured, registerAdminWithFirebase } from '../services/firebase';
 
-const LOGO_URL = '/assets/majo-logo.svg';
+const LOGO_URL = '/assets/logo%20MAJO.png';
 
 interface RegisterViewProps {
   onNavigate: (view: AuthView) => void;
@@ -52,7 +53,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
     }
   };
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -105,9 +106,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
-
+    try {
       // If admin, update portal config with the newly created portal address and permanent link
       if (role === 'admin') {
         const cleanSlug = portalAddress
@@ -141,20 +140,24 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         createdAt: new Date().toISOString(),
       };
 
-      try {
+      if (role === 'admin' && isFirebaseConfigured) {
+        await registerAdminWithFirebase(newAccount, password);
+      } else {
         const stored = localStorage.getItem('majo_accounts');
         const accounts = stored ? JSON.parse(stored) : [];
         accounts.push(newAccount);
         localStorage.setItem('majo_accounts', JSON.stringify(accounts));
-      } catch {
-        // ignore
       }
 
+      setIsLoading(false);
       setSuccessAccount(newAccount);
       if (onRegisterSuccess) {
         onRegisterSuccess(newAccount);
       }
-    }, 900);
+    } catch (error) {
+      setIsLoading(false);
+      setErrorMsg(error instanceof Error ? error.message : 'Registrasi gagal. Silakan coba lagi.');
+    }
   };
 
   return (

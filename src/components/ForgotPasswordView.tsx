@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { AuthView, RegisteredAccount } from '../types';
+import { isFirebaseConfigured, sendFirebasePasswordReset } from '../services/firebase';
 
-const LOGO_URL = '/assets/majo-logo.svg';
+const LOGO_URL = '/assets/logo%20MAJO.png';
 
 interface ForgotPasswordViewProps {
   onNavigate: (view: AuthView) => void;
@@ -19,12 +20,30 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
   const [ticketId, setTicketId] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
     if (!username.trim()) {
       setErrorMessage('Harap masukkan username akun MAJO Anda.');
+      return;
+    }
+
+    if (isFirebaseConfigured) {
+      if (!email.trim()) {
+        setErrorMessage('Masukkan email admin terdaftar untuk menerima tautan reset password.');
+        return;
+      }
+      setIsLoading(true);
+      try {
+        await sendFirebasePasswordReset(email);
+        setTicketId('RESET-FIREBASE');
+        setIsSubmitted(true);
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : 'Email reset password gagal dikirim.');
+      } finally {
+        setIsLoading(false);
+      }
       return;
     }
 

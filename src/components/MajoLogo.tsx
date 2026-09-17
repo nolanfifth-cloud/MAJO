@@ -87,7 +87,7 @@ export const MajoLogo: React.FC<MajoLogoProps> = ({
     return (
       <div className={`flex items-center ${sizeStyles.container} ${className}`}>
         <img
-          src="/assets/majo-logo.svg"
+          src="/assets/logo%20MAJO.png"
           alt="MAJO Logo"
           className={`${sizeStyles.icon} object-contain`}
         />
@@ -106,7 +106,7 @@ export const MajoLogo: React.FC<MajoLogoProps> = ({
   return (
     <div className={`flex flex-col items-center justify-center ${className}`}>
       <img
-        src="/assets/majo-logo.svg"
+        src="/assets/logo%20MAJO.png"
         alt="MAJO Logo"
         className="w-full h-full object-contain select-none"
       />

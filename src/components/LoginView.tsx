@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { AuthView, RegisteredAccount } from '../types';
+import { isFirebaseConfigured, loginWithFirebase } from '../services/firebase';
 
-const LOGO_URL = '/assets/majo-logo.svg';
+const LOGO_URL = '/assets/logo%20MAJO.png';
 
 interface LoginViewProps {
   onNavigate: (view: AuthView) => void;
@@ -22,7 +23,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [loggedInRole, setLoggedInRole] = useState<'admin' | 'user'>('admin');
   const [errorMessage, setErrorMessage] = useState('');
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -37,23 +38,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
       let foundAccount: RegisteredAccount | undefined;
-      try {
-        const stored = localStorage.getItem('majo_accounts');
-        if (stored) {
-          const accounts: RegisteredAccount[] = JSON.parse(stored);
-          const credential = username.trim().toLowerCase();
-          foundAccount = accounts.find(
-            (account) => account.username?.toLowerCase() === credential || account.email?.toLowerCase() === credential
-          );
+
+      if (isFirebaseConfigured) {
+        foundAccount = await loginWithFirebase(username, password);
+      } else {
+        try {
+          const stored = localStorage.getItem('majo_accounts');
+          if (stored) {
+            const accounts: RegisteredAccount[] = JSON.parse(stored);
+            const credential = username.trim().toLowerCase();
+            foundAccount = accounts.find(
+              (account) => account.username?.toLowerCase() === credential || account.email?.toLowerCase() === credential
+            );
+          }
+        } catch {
+          foundAccount = undefined;
         }
-      } catch {
-        foundAccount = undefined;
       }
 
-      if (!foundAccount || foundAccount.password !== password) {
+      if (!foundAccount || (!isFirebaseConfigured && foundAccount.password !== password)) {
         setErrorMessage('Username/email atau kata sandi tidak sesuai.');
         return;
       }
@@ -74,7 +79,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
       } else {
         onNavigate('user_dashboard');
       }
-    }, 900);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Login gagal. Silakan coba lagi.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleLogout = () => {

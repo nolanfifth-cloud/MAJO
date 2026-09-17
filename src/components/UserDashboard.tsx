@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AuthView } from '../types';
 import { RiwayatSelesaiView } from './RiwayatSelesaiView';
 import { ProfilTeknisiView } from './ProfilTeknisiView';
+import { isCloudinaryConfigured, uploadPhotoToCloudinary } from '../services/cloudinary';
 import {
   ListChecks,
   Clock,
@@ -352,37 +353,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     triggerToast('Baris perangkat baru ditambahkan!');
   };
 
-  // Add new job tab
-  const addNewJobTab = () => {
-    const newTabId = Object.keys(jobsDatabase).length + 1;
-    const newJob: JobTabItem = {
-      id: newTabId,
-      title: `Daftar Jobs ${newTabId}: Tugas Tambahan Teknis`,
-      devices: [
-        {
-          id: `dev_${newTabId}_1`,
-          location: '',
-          expanded: true,
-          statusState: 'INITIAL',
-          formData: {
-            photo: '',
-            photoName: '',
-            status: 'normal',
-            keterangan: '',
-            durasi: '',
-          },
-        },
-      ],
-    };
-
-    setJobsDatabase((prev) => ({
-      ...prev,
-      [newTabId]: newJob,
-    }));
-    setCurrentJobId(newTabId);
-    triggerToast(`Tab Jobs ${newTabId} ditambahkan!`);
-  };
-
   // Prompt delete device
   const promptDeleteDevice = (deviceId: string) => {
     setDeleteTargetId(deviceId);
@@ -483,10 +453,20 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     });
   };
 
-  // File upload simulation
-  const handlePhotoUpload = (deviceId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
+  const handlePhotoUpload = async (deviceId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (isCloudinaryConfigured) {
+        try {
+          const photoUrl = await uploadPhotoToCloudinary(file);
+          updateDeviceForm(deviceId, { photo: photoUrl, photoName: file.name });
+          triggerToast('Foto berhasil disimpan ke Cloudinary!');
+        } catch (error) {
+          triggerToast(error instanceof Error ? error.message : 'Upload foto gagal.', false);
+        }
+        return;
+      }
+
       const reader = new FileReader();
       reader.onload = (uploadEvent) => {
         updateDeviceForm(deviceId, {
@@ -496,6 +476,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         triggerToast('Foto lampiran berhasil diunggah!');
       };
       reader.readAsDataURL(file);
+      triggerToast('Foto lampiran tersimpan sementara di browser.');
     }
   };
 
@@ -532,7 +513,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               <img
                 alt="MAJO Logo"
                 className="w-full h-full object-contain"
-                src="/assets/majo-logo.svg"
+                src="/assets/logo%20MAJO.png"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src =
                     'https://lh3.googleusercontent.com/aida/AEtjO1UqoYl0lso8Lfc9d6sgwWr4n3xq8viIowOombtBvfCqwYHo4zjlkbyOkjx4SXPjRz6x-HvH-TAWx7YXFo5p0aoE9Y_oMLE8dk4Mxsx8ceh7WLK8jVFWQOl76wEmSc_jxosbBXkDDrEU8rXTFfG6zamQgfrA9_7q5LL3eLC8fAOYBMOEH5uDDyxDKLctrODYAXetDlOfIMXFXQVBNL5mzfQ1mpKBYH6I5b-Dd20QrOpX6oalDSsOmWYmygz2WL2myDCzCjDLTdttKpA';
@@ -941,15 +922,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                         );
                       })}
 
-                      <button
-                        type="button"
-                        onClick={addNewJobTab}
-                        className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
-                        title="Tambah Daftar Jobs Lain"
-                      >
-                        <Plus className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Tambah Jobs</span>
-                      </button>
                     </div>
                   </div>
 
