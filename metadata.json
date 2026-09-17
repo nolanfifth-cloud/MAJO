@@ -1,0 +1,6 @@
+{
+  "name": "MAJO Portal",
+  "description": "Portal pemantauan operasional lapangan MAJO - Layanan autentikasi terenkripsi, Dashboard Admin Monitoring, dan Dashboard Penugasan Teknisi Lapangan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

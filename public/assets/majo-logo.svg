@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" fill="none">
+  <defs>
+    <!-- Left column dark royal-blue facet gradient -->
+    <linearGradient id="majo-left-facet" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#003d99" />
+      <stop offset="50%" stop-color="#0954c8" />
+      <stop offset="100%" stop-color="#196fe6" />
+    </linearGradient>
+
+    <!-- Left folded diagonal electric-blue facet gradient -->
+    <linearGradient id="majo-diagonal-facet" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#247cf7" />
+      <stop offset="60%" stop-color="#0b63e5" />
+      <stop offset="100%" stop-color="#004fc7" />
+    </linearGradient>
+
+    <!-- Top-right diagonal floating pill cyan-to-blue gradient -->
+    <linearGradient id="majo-pill-cyan" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="30%" stop-color="#00b4d8" />
+      <stop offset="70%" stop-color="#0091ff" />
+      <stop offset="100%" stop-color="#0066ff" />
+    </linearGradient>
+
+    <!-- Right vertical pillar vibrant royal blue gradient -->
+    <linearGradient id="majo-right-pillar" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0091ff" />
+      <stop offset="40%" stop-color="#0077ff" />
+      <stop offset="100%" stop-color="#0055d4" />
+    </linearGradient>
+  </defs>
+
+  <!-- M Emblem -->
+  <g id="majo-emblem">
+    <!-- 1a. Left Vertical Facet (Dark blue fold) -->
+    <path
+      d="M 158 272
+         L 158 128
+         C 158 115 167 106.5 179.5 106.5
+         L 201 149
+         L 201 252
+         L 158 272 Z"
+      fill="url(#majo-left-facet)"
+    />
+
+    <!-- 1b. Left Folded Diagonal Facet (Vibrant electric blue) -->
+    <path
+      d="M 179.5 106.5
+         L 250 177
+         L 228.5 198.5
+         L 201 149
+         L 179.5 106.5 Z"
+      fill="url(#majo-diagonal-facet)"
+    />
+
+    <!-- 2. Top-Right Floating Diagonal Pill (Exact -45° capsule with rounded ends) -->
+    <path
+      d="M 318.8 91.8
+         A 21.5 21.5 0 0 1 349.2 122.2
+         L 281.2 190.2
+         A 21.5 21.5 0 0 1 250.8 159.8
+         L 318.8 91.8 Z"
+      fill="url(#majo-pill-cyan)"
+    />
+
+    <!-- 3. Right Vertical Pillar with rounded top cap & angled bottom cut -->
+    <path
+      d="M 299 155
+         A 21.5 21.5 0 0 1 342 155
+         L 342 252
+         L 299 272
+         L 299 155 Z"
+      fill="url(#majo-right-pillar)"
+    />
+  </g>
+
+  <!-- MAJO Wordmark (Navy: #0b2146) -->
+  <g id="majo-wordmark" fill="#0b2146">
+    <!-- Letter 'M': rounded terminals, center V down to baseline -->
+    <path
+      d="M 96 398
+         C 92 398 90 395 90 391
+         L 90 338
+         C 90 334 93 331 97.5 331
+         C 101.5 331 104.5 333.5 106.5 337.5
+         L 127 377
+         L 147.5 337.5
+         C 149.5 333.5 152.5 331 156.5 331
+         C 161 331 164 334 164 338
+         L 164 391
+         C 164 395 162 398 158 398
+         C 154 398 151.5 395 151.5 391
+         L 151.5 350
+         L 132 388
+         C 130.5 391 128 393 125 393
+         C 122 393 119.5 391 118 388
+         L 98.5 350
+         L 98.5 391
+         C 98.5 395 96 398 96 398 Z"
+    />
+
+    <!-- Letter 'A' (Chevron / Lambda without middle horizontal crossbar) -->
+    <path
+      d="M 186 398
+         C 182 398 179 395 181 391
+         L 207 337
+         C 209.5 332 216.5 332 219 337
+         L 245 391
+         C 247 395 244 398 240 398
+         C 236.5 398 234 396 232 392
+         L 213 353
+         L 194 392
+         C 192 396 189.5 398 186 398 Z"
+    />
+
+    <!-- Letter 'J' with curved rounded hook -->
+    <path
+      d="M 317 338
+         L 317 379
+         C 317 391 307 399 293 399
+         C 281 399 271 392 271 382
+         C 271 378 274 375 278 375
+         C 282 375 285 378 285 382
+         C 285 387 289 390 294 390
+         C 300 390 304 386 304 379
+         L 304 338
+         C 304 334 307 331 310.5 331
+         C 314 331 317 334 317 338 Z"
+    />
+
+    <!-- Letter 'O' with clean geometric round curve -->
+    <path
+      fill-rule="evenodd"
+      clip-rule="evenodd"
+      d="M 374 330
+         C 394 330 410 345.5 410 364.5
+         C 410 383.5 394 399 374 399
+         C 354 399 338 383.5 338 364.5
+         C 338 345.5 354 330 374 330 Z
+         M 374 343.5
+         C 386 343.5 396.5 353 396.5 364.5
+         C 396.5 376 386 385.5 374 385.5
+         C 362 385.5 351.5 376 351.5 364.5
+         C 351.5 353 362 343.5 374 343.5 Z"
+    />
+  </g>
+</svg>
