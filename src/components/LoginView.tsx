@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AuthView } from '../types';
+import { AuthView, RegisteredAccount } from '../types';
 
 const LOGO_URL = '/assets/majo-logo.svg';
 
@@ -14,8 +14,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
   prefilledUsername = '',
   onLoginSuccess,
 }) => {
-  const [username, setUsername] = useState(prefilledUsername || 'superadmin');
-  const [password, setPassword] = useState('••••••••');
+  const [username, setUsername] = useState(prefilledUsername);
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loginSuccessUser, setLoginSuccessUser] = useState<string | null>(null);
@@ -39,39 +39,33 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     setTimeout(() => {
       setIsLoading(false);
-      setLoginSuccessUser(username);
-
-      // Check registered accounts or default admin/user role
-      let role: 'admin' | 'user' = 'admin';
-      let displayName = username === 'superadmin' || username === 'admin' ? 'Super Admin' : username;
-
-      // If username starts with 'user' or contains 'teknisi', default to user role
-      if (
-        username.trim().toLowerCase().startsWith('user') ||
-        username.trim().toLowerCase().includes('teknisi')
-      ) {
-        role = 'user';
-        displayName = username.trim();
-      }
-
+      let foundAccount: RegisteredAccount | undefined;
       try {
         const stored = localStorage.getItem('majo_accounts');
         if (stored) {
-          const accounts = JSON.parse(stored);
-          const found = accounts.find((a: any) => a.username?.toLowerCase() === username.trim().toLowerCase());
-          if (found) {
-            role = found.role || role;
-            displayName = found.name || username;
-          }
+          const accounts: RegisteredAccount[] = JSON.parse(stored);
+          const credential = username.trim().toLowerCase();
+          foundAccount = accounts.find(
+            (account) => account.username?.toLowerCase() === credential || account.email?.toLowerCase() === credential
+          );
         }
       } catch {
-        // fallback
+        foundAccount = undefined;
       }
+
+      if (!foundAccount || foundAccount.password !== password) {
+        setErrorMessage('Username/email atau kata sandi tidak sesuai.');
+        return;
+      }
+
+      const role = foundAccount.role;
+      const displayName = foundAccount.name || username;
+      setLoginSuccessUser(foundAccount.username);
 
       setLoggedInRole(role);
 
       if (onLoginSuccess) {
-        onLoginSuccess({ username, name: displayName, role });
+        onLoginSuccess({ username: foundAccount.username, name: displayName, role });
       }
 
       // Navigate to appropriate dashboard based on user role
@@ -285,7 +279,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     className="text-[11px] font-bold text-secondary uppercase tracking-wider px-1"
                     htmlFor="usernameInput"
                   >
-                    <b>Username</b>
+                    <b>Username atau Email</b>
                   </label>
                   <div className="relative flex items-center w-full group">
                     <div className="absolute left-4 flex items-center justify-center pointer-events-none text-secondary group-focus-within:text-primary transition-colors">
@@ -296,7 +290,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       className="w-full h-14 pl-12 pr-4 bg-surface-container-low text-on-surface text-sm placeholder:text-outline rounded-full outline-none transition-all duration-200 focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary/20 shadow-sm"
                       id="usernameInput"
                       name="username"
-                      placeholder="Masukkan username"
+                      placeholder="Username atau email admin"
                       required
                       type="text"
                       value={username}

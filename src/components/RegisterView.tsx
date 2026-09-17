@@ -20,6 +20,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   const portalConfig = useMemo(() => getPortalConfig(), []);
   const [role, setRole] = useState<UserRole>('admin');
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -81,6 +82,10 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       setErrorMsg('Harap masukkan nama lengkap Anda.');
       return;
     }
+    if (role === 'admin' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErrorMsg('Harap masukkan alamat email admin yang valid.');
+      return;
+    }
     if (!username.trim()) {
       setErrorMsg('Harap masukkan username Anda.');
       return;
@@ -105,11 +110,18 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
 
       // If admin, update portal config with the newly created portal address and permanent link
       if (role === 'admin') {
-        const cleanSlug = portalAddress.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        const cleanSlug = portalAddress
+          .trim()
+          .toLowerCase()
+          .replace(/\.majo\.id$/, '')
+          .replace(/[^a-z0-9-]/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '');
+        const portalDomain = `${cleanSlug}.majo.id`;
         const updatedConfig = {
           ...portalConfig,
-          portalAddress: cleanSlug,
-          portalLink: `portal.majo.id/org/${cleanSlug}`,
+          portalAddress: portalDomain,
+          portalLink: portalDomain,
           isActivated: true,
         };
         savePortalConfig(updatedConfig);
@@ -118,8 +130,13 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       const newAccount: RegisteredAccount = {
         name: name.trim(),
         username: username.trim().toLowerCase(),
+        email: role === 'admin' ? email.trim().toLowerCase() : undefined,
+        password,
         role,
-        portalAddress: portalAddress.trim(),
+        portalAddress:
+          role === 'admin'
+            ? `${portalAddress.trim().toLowerCase().replace(/\.majo\.id$/, '')}.majo.id`
+            : portalAddress.trim(),
         location: role === 'user' ? selectedLocation : undefined,
         createdAt: new Date().toISOString(),
       };
@@ -461,7 +478,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                 )}
                 {role === 'admin' && (
                   <p className="text-[11px] text-slate-400 mt-1 pl-3">
-                    Setelah ini Anda akan dipindahkan ke dashboard untuk melengkapi data lokasi kerja (perwilayah &amp; per-grup).
+                    Sistem akan selalu menambahkan akhiran <span className="font-semibold">.majo.id</span> pada alamat portal.
                   </p>
                 )}
               </div>
@@ -534,6 +551,34 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                   />
                 </div>
               </div>
+
+              {role === 'admin' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label htmlFor="reg-email" className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      ALAMAT EMAIL ADMIN
+                    </label>
+                    <span className="text-[10px] font-semibold text-rose-500">Wajib Diisi</span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-4 text-slate-400">
+                      <span className="material-symbols-outlined text-[18px]">mail</span>
+                    </span>
+                    <input
+                      type="email"
+                      id="reg-email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="admin@perusahaan.com"
+                      required
+                      className="w-full pl-11 pr-4 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-full text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all shadow-2xs"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 pl-3">
+                    Email ini digunakan untuk pemulihan password admin.
+                  </p>
+                </div>
+              )}
 
               {/* 4. USERNAME FIELD */}
               <div>

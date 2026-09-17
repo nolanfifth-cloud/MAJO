@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AuthView } from '../types';
+import { AuthView, RegisteredAccount } from '../types';
 
 const LOGO_URL = '/assets/majo-logo.svg';
 
@@ -9,6 +9,9 @@ interface ForgotPasswordViewProps {
 
 export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNavigate }) => {
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -25,6 +28,34 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
       return;
     }
 
+    if (email.trim() && newPassword) {
+      if (newPassword.length < 4 || newPassword !== confirmNewPassword) {
+        setErrorMessage('Password baru minimal 4 karakter dan harus sama dengan konfirmasinya.');
+        return;
+      }
+      try {
+        const stored = localStorage.getItem('majo_accounts');
+        const accounts: RegisteredAccount[] = stored ? JSON.parse(stored) : [];
+        const accountIndex = accounts.findIndex(
+          (account) =>
+            account.role === 'admin' &&
+            (account.username.toLowerCase() === username.trim().toLowerCase() ||
+              account.email?.toLowerCase() === username.trim().toLowerCase()) &&
+            account.email?.toLowerCase() === email.trim().toLowerCase()
+        );
+        if (accountIndex < 0) {
+          setErrorMessage('Username dan email admin tidak cocok.');
+          return;
+        }
+        accounts[accountIndex].password = newPassword;
+        localStorage.setItem('majo_accounts', JSON.stringify(accounts));
+        setTicketId('RESET-MANDIRI');
+      } catch {
+        setErrorMessage('Pemulihan mandiri tidak tersedia pada perangkat ini.');
+        return;
+      }
+    }
+
     setIsLoading(true);
 
     setTimeout(() => {
@@ -37,6 +68,9 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
 
   const handleResetFormState = () => {
     setUsername('');
+    setEmail('');
+    setNewPassword('');
+    setConfirmNewPassword('');
     setEmployeeId('');
     setNotes('');
     setIsSubmitted(false);
@@ -265,6 +299,39 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                   <p className="text-xs text-secondary">
                     Username terdaftar yang biasa digunakan untuk login sistem operasional.
                   </p>
+                </div>
+
+                {/* Admin self-service recovery fields */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-on-surface uppercase tracking-wider" htmlFor="emailInput">
+                    Email Admin Terdaftar
+                  </label>
+                  <input
+                    className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-base placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
+                    id="emailInput"
+                    name="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Isi untuk reset mandiri admin"
+                    type="email"
+                  />
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <input
+                    className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-sm placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Password baru admin"
+                    type="password"
+                  />
+                  <input
+                    className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-sm placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    placeholder="Ulangi password baru"
+                    type="password"
+                  />
                 </div>
 
                 {/* Additional Identity Field */}

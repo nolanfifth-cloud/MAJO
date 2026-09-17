@@ -162,8 +162,8 @@ export interface PortalMasterConfig {
   masterGroups: RegionConfig[];
 }
 
-const DEFAULT_PORTAL_ADDRESS = 'pt-majo-logistik-indo';
-const DEFAULT_PORTAL_LINK = 'portal.majo.id/org/pt-majo-logistik-indo';
+const DEFAULT_PORTAL_ADDRESS = 'pt-majo-logistik-indo.majo.id';
+const DEFAULT_PORTAL_LINK = 'pt-majo-logistik-indo.majo.id';
 
 export const INITIAL_MASTER_WILAYAH: string[] = [
   'Medan - Hub Operasional',
@@ -268,7 +268,7 @@ export function validatePortalAddress(input: string): boolean {
   const cleaned = input.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
   const config = getPortalConfig();
   const validLink = config.portalLink.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const validAddress = config.portalAddress.toLowerCase();
+  const validAddress = config.portalAddress.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
 
   // Also check stored accounts
   let customAddresses: string[] = [];
@@ -276,7 +276,9 @@ export function validatePortalAddress(input: string): boolean {
     const stored = localStorage.getItem('majo_accounts');
     if (stored) {
       const accounts: RegisteredAccount[] = JSON.parse(stored);
-      customAddresses = accounts.filter((a) => a.role === 'admin').map((a) => a.portalAddress.toLowerCase());
+      customAddresses = accounts
+        .filter((a) => a.role === 'admin' && a.portalAddress)
+        .map((a) => a.portalAddress.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, ''));
     }
   } catch {
     // ignore
@@ -285,9 +287,6 @@ export function validatePortalAddress(input: string): boolean {
   return (
     cleaned === validAddress ||
     cleaned === validLink ||
-    cleaned.includes(validAddress) ||
-    validLink.includes(cleaned) ||
-    customAddresses.some((addr) => cleaned === addr || cleaned.includes(addr) || addr.includes(cleaned)) ||
-    cleaned.includes('majo')
+    customAddresses.includes(cleaned)
   );
 }

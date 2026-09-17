@@ -5,6 +5,8 @@ export type UserRole = 'admin' | 'user';
 export interface RegisteredAccount {
   name: string;
   username: string;
+  email?: string;
+  password?: string;
   role: UserRole;
   portalAddress: string;
   location?: string;
