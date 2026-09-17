@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AuthView, RegisteredAccount } from '../types';
+import { AuthView } from '../types';
 import { isFirebaseConfigured, sendFirebasePasswordReset } from '../services/firebase';
 
 const LOGO_URL = '/assets/logo%20MAJO.png';
@@ -11,8 +11,6 @@ interface ForgotPasswordViewProps {
 export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNavigate }) => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -46,50 +44,12 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
       }
       return;
     }
-
-    if (email.trim() && newPassword) {
-      if (newPassword.length < 4 || newPassword !== confirmNewPassword) {
-        setErrorMessage('Password baru minimal 4 karakter dan harus sama dengan konfirmasinya.');
-        return;
-      }
-      try {
-        const stored = localStorage.getItem('majo_accounts');
-        const accounts: RegisteredAccount[] = stored ? JSON.parse(stored) : [];
-        const accountIndex = accounts.findIndex(
-          (account) =>
-            account.role === 'admin' &&
-            (account.username.toLowerCase() === username.trim().toLowerCase() ||
-              account.email?.toLowerCase() === username.trim().toLowerCase()) &&
-            account.email?.toLowerCase() === email.trim().toLowerCase()
-        );
-        if (accountIndex < 0) {
-          setErrorMessage('Username dan email admin tidak cocok.');
-          return;
-        }
-        accounts[accountIndex].password = newPassword;
-        localStorage.setItem('majo_accounts', JSON.stringify(accounts));
-        setTicketId('RESET-MANDIRI');
-      } catch {
-        setErrorMessage('Pemulihan mandiri tidak tersedia pada perangkat ini.');
-        return;
-      }
-    }
-
-    setIsLoading(true);
-
-    setTimeout(() => {
-      const generatedTicket = `#RST-${Math.floor(10000 + Math.random() * 90000)}`;
-      setTicketId(generatedTicket);
-      setIsLoading(false);
-      setIsSubmitted(true);
-    }, 1000);
+    setErrorMessage('Firebase belum dikonfigurasi. Hubungkan Firebase Authentication untuk mengirim email reset password.');
   };
 
   const handleResetFormState = () => {
     setUsername('');
     setEmail('');
-    setNewPassword('');
-    setConfirmNewPassword('');
     setEmployeeId('');
     setNotes('');
     setIsSubmitted(false);
@@ -245,7 +205,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                   </div>
                   <div>
                     <p className="text-base font-bold text-on-surface">
-                      Permintaan Terkirim ke Administrator
+                      Link Reset Password Terkirim
                     </p>
                     <p className="text-xs text-secondary">
                       Tiket antrean ID:{' '}
@@ -256,9 +216,9 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                   </div>
                 </div>
                 <p className="text-sm text-on-surface-variant leading-relaxed">
-                  Data pemulihan akun <strong className="text-on-surface">@{username}</strong> sedang
-                  diperiksa oleh Tim Administrator MAJO. Harap tetap terhubung pada kanal komunikasi
-                  internal operasional Anda.
+                  Tautan untuk mengganti password akun <strong className="text-on-surface">@{username}</strong> telah
+                  dikirim ke <strong className="text-on-surface">{email}</strong>. Buka Gmail tersebut dan ikuti
+                  instruksi Firebase untuk membuat password baru.
                 </p>
                 <div className="pt-3 flex flex-col sm:flex-row gap-3">
                   <button
@@ -297,7 +257,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                     className="flex items-center justify-between text-xs font-bold text-on-surface uppercase tracking-wider"
                     htmlFor="usernameInput"
                   >
-                    <span>Username Akun</span>
+                      <span>Username Akun Admin</span>
                     <span className="text-[10px] text-error font-semibold">Wajib Diisi</span>
                   </label>
                   <div className="relative flex items-center">
@@ -322,35 +282,27 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
 
                 {/* Admin self-service recovery fields */}
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-on-surface uppercase tracking-wider" htmlFor="emailInput">
-                    Email Admin Terdaftar
-                  </label>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs font-bold text-on-surface uppercase tracking-wider" htmlFor="emailInput">
+                      Email Admin Terdaftar
+                    </label>
+                    <span className="px-2 py-0.5 rounded-full bg-primary-fixed text-on-primary-fixed text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
+                      Khusus admin
+                    </span>
+                  </div>
                   <input
                     className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-base placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
                     id="emailInput"
                     name="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Isi untuk reset mandiri admin"
+                    placeholder="Email Gmail admin terdaftar"
+                    required
                     type="email"
                   />
-                </div>
-
-                <div className="grid sm:grid-cols-2 gap-3">
-                  <input
-                    className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-sm placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Password baru admin"
-                    type="password"
-                  />
-                  <input
-                    className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-sm placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
-                    value={confirmNewPassword}
-                    onChange={(e) => setConfirmNewPassword(e.target.value)}
-                    placeholder="Ulangi password baru"
-                    type="password"
-                  />
+                  <p className="text-xs text-secondary">
+                    Tautan untuk mengganti password akan dikirim ke Gmail ini.
+                  </p>
                 </div>
 
                 {/* Additional Identity Field */}
