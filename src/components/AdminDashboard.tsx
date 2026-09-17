@@ -3,6 +3,7 @@ import { PmItem, AuthView } from '../types';
 import { CreateJobsView } from './CreateJobsView';
 import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
+import { downloadPmReportExcel } from '../services/excelExport';
 
 interface AdminDashboardProps {
   onNavigate: (view: AuthView) => void;
@@ -351,60 +352,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     triggerBottomToast('Pekerjaan Berhasil Dihapus', 'Data pekerjaan PM telah dihapus permanen dari server MAJO.', 'delete');
   };
 
-  // Export to Excel (.xlsx/.csv)
-  const handleExportExcel = (pm: PmItem | null) => {
+  // Export a formatted XLSX workbook with summary and verification tables.
+  const handleExportExcel = async (pm: PmItem | null) => {
     const target = pm || currentSelectedPm;
     if (!target) return;
 
     setIsExporting(true);
-
-    setTimeout(() => {
-      const csvRows = [
-        ['ID PM', 'Nama PM', 'Periode Pelaksanaan', 'Penanggung Jawab', 'Jabatan PIC', 'Wilayah Cakupan', 'Jumlah Sub-Stasiun', 'Status Progres', 'Item Selesai', 'Total Checklist', 'Tanggal Unduh', 'PIC Verifikasi'],
-        [
-          target.code,
-          `"${target.title}"`,
-          `"${target.dates}"`,
-          `"${target.pic}"`,
-          `"${target.picRole}"`,
-          `"${target.regions}"`,
-          `${target.subStationCount || 12} Sub-Stasiun`,
-          `${target.progress}% Selesai`,
-          target.doneCount,
-          target.totalCount,
-          '13 September 2026 14:00 WIB',
-          'Super Admin Region Central',
-        ],
-        [],
-        ['Rincian Modul & Status Verifikasi Lapangan'],
-        ['No', 'Modul Pekerjaan', 'Target Checklist', 'Status', 'Catatan Verifikasi'],
-        ['1', '"Pemeriksaan Fisik Gardu & Transformator Utama"', '18 Item', 'Selesai (Verified)', '3 Foto Bukti Terunggah (Termometer & Level Oli)'],
-        ['2', '"Panel Distribusi Tegangan Menengah (Cubicle 20kV)"', '14 Item', 'Selesai (Verified)', '2 Foto Bukti (Gas SF6 & Kontak Breaker Bersih)'],
-        ['3', '"Sistem Proteksi & Grounding Earthing"', '12 Item', 'Selesai (Verified)', 'Nilai Tahanan Pembumian < 2 Ohm Sesuai SOP'],
-        ['4', '"Fasilitas Proteksi Lingkungan & Baterai Catu Daya"', '12 Item', 'Selesai (Verified)', 'DC 110V Normal, Detector Asap Aktif'],
-      ];
-
-      const csvContent = '\uFEFF' + csvRows.map((e) => e.join(',')).join('\r\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const downloadAnchor = document.createElement('a');
-      downloadAnchor.href = url;
-      downloadAnchor.setAttribute('download', `Laporan_${target.code}_${target.progress}_Selesai.csv`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      document.body.removeChild(downloadAnchor);
-      URL.revokeObjectURL(url);
-
-      setIsExporting(false);
+    try {
+      await downloadPmReportExcel(target);
       setExportToast({
         show: true,
         message: `Laporan ${target.code} (${target.doneCount}/${target.totalCount} Checklist Selesai) tersimpan.`,
       });
-
       setTimeout(() => {
         setExportToast((prev) => ({ ...prev, show: false }));
       }, 4500);
-    }, 800);
+    } catch (error) {
+      setExportToast({
+        show: true,
+        message: error instanceof Error ? error.message : 'Export laporan gagal. Silakan coba lagi.',
+      });
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // Reset to sample or empty state helper
