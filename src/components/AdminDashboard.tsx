@@ -14,7 +14,8 @@ interface AdminDashboardProps {
   };
 }
 
-const INITIAL_PMS: PmItem[] = [
+const INITIAL_PMS: PmItem[] = [];
+/*
   {
     id: 'pm-row-1',
     code: 'PM-2026-SEP-001',
@@ -80,15 +81,15 @@ const INITIAL_PMS: PmItem[] = [
       { name: 'Uji Alarm Ambang Suhu Ekstrem PLC', itemCount: 8 },
     ],
   },
-];
+]; */
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onNavigate,
-  currentUser = { username: 'superadmin', name: 'Super Admin', role: 'admin' },
+  currentUser = { username: '', name: '', role: 'admin' },
 }) => {
   // Primary list state
   const [pmList, setPmList] = useState<PmItem[]>(INITIAL_PMS);
-  const [selectedPmId, setSelectedPmId] = useState<string>('pm-row-1');
+  const [selectedPmId, setSelectedPmId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRegionFilter, setSelectedRegionFilter] = useState('Semua Region');
   const [isPortalConfigured, setIsPortalConfigured] = useState<boolean>(() => {
@@ -157,6 +158,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       setPmList(baseList);
+      if (!baseList.length) setSelectedPmId('');
     } catch {
       // Ignore parse errors
     }
@@ -182,7 +184,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [editStart, setEditStart] = useState('');
   const [editEnd, setEditEnd] = useState('');
   const [editRegions, setEditRegions] = useState('');
-  const [editPic, setEditPic] = useState('Agus Setiawan, S.T.');
+  const [editPic, setEditPic] = useState('');
   const [editModules, setEditModules] = useState<{ name: string; itemCount: number }[]>([]);
 
   // Delete verification
@@ -244,7 +246,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEditStart('2026-10-01');
       setEditEnd('2026-10-28');
       setEditRegions('Medan, Jakarta, Surabaya');
-      setEditPic('Agus Setiawan, S.T.');
+      setEditPic('');
       setEditModules([
         { name: 'Pemeriksaan Gardu & Transformator Induk', itemCount: 12 },
         { name: 'Uji Arus Beban Puncak & Suhu Koneksi', itemCount: 8 },
@@ -377,20 +379,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Reset to sample or empty state helper
-  const handleToggleState = () => {
-    if (pmList.length > 0) {
-      setPmList([]);
-      setShowWarningBanner(true);
-      triggerBottomToast('Mode Inisialisasi Kosong Aktif', 'Menampilkan tampilan status awal tanpa data penugasan.');
-    } else {
-      setPmList(INITIAL_PMS);
-      setSelectedPmId('pm-row-1');
-      setShowWarningBanner(false);
-      triggerBottomToast('Data Sample Berhasil Dimuat', '2 Penugasan aktif PM berhasil dipulihkan.');
-    }
-  };
-
   return (
     <div className="bg-background font-body-md text-on-surface antialiased min-h-screen relative flex">
       {/* ========================================================================= */}
@@ -505,16 +493,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {/* Top Right Badges & Controls */}
           <div className="flex items-center gap-4 relative">
-            {/* Toggle demo view */}
-            <button
-              type="button"
-              onClick={handleToggleState}
-              className="text-[11px] font-semibold px-2.5 py-1 rounded-full border border-outline-variant/40 bg-surface-container-low hover:bg-surface-container text-secondary transition-colors cursor-pointer"
-              title="Ganti antara data terisi (Image 1) dan data kosong inisialisasi (Image 2)"
-            >
-              {pmList.length > 0 ? 'Lihat Tampilan Kosong' : 'Muat Data Sample'}
-            </button>
-
             {/* Encrypted Node status */}
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low border border-outline-variant/20">
               <span className="inline-block w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
@@ -544,8 +522,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="py-2 space-y-2">
                     <div className="p-2 rounded-lg bg-surface-container-low text-xs">
                       <p className="font-semibold text-on-surface">Inspeksi Selesai 100%</p>
-                      <p className="text-secondary text-[11px]">Agus Setiawan menyelesaikan gardu #04 Medan.</p>
-                      <span className="text-[10px] text-outline">12 menit lalu</span>
+                      <p className="text-secondary text-[11px]">Tidak ada notifikasi baru.</p>
                     </div>
                   </div>
                 </div>
@@ -561,7 +538,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                 <div className="flex flex-col text-right">
                   <span className="font-label-md text-label-md text-on-surface leading-tight font-semibold">
-                    {currentUser.name || 'Super Admin'}
+                    {currentUser.name || 'Belum login'}
                   </span>
                   <span className="font-body-sm text-body-sm text-secondary">Region Central</span>
                 </div>
@@ -573,7 +550,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {showProfileMenu && (
                 <div className="absolute right-0 mt-2 w-56 bg-surface-container-lowest rounded-xl shadow-xl border border-outline-variant/30 p-2 z-50">
                   <div className="px-3 py-2 border-b border-outline-variant/20">
-                    <p className="text-xs font-bold text-on-surface">{currentUser.name || 'Super Admin'}</p>
+                    <p className="text-xs font-bold text-on-surface">{currentUser.name || 'Belum login'}</p>
                     <p className="text-[11px] text-secondary">@{currentUser.username}</p>
                     <span className="inline-block mt-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-bold uppercase">
                       Admin Berwenang
@@ -650,8 +627,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onNavigateToLinkPortal={() => setActiveNav('link-portal')}
               onLogout={() => onNavigate('login')}
               currentUser={{
-                username: currentUser?.username || 'superadmin',
-                name: currentUser?.name || 'Super Admin',
+                username: currentUser?.username || '',
+                name: currentUser?.name || '',
                 role: currentUser?.role || 'admin',
               }}
             />
@@ -1569,7 +1546,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       </div>
                       <p className="font-body-sm text-body-sm text-secondary mt-1">
-                        Wilayah: <strong>Gardu Medan Induk - Hub 01</strong> • PIC Pelaksana: <strong>Bambang S.</strong>
+                        Wilayah: <strong>Belum ada data wilayah</strong> • PIC Pelaksana: <strong>Belum ditentukan</strong>
                       </p>
                       <div className="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant font-medium">
                         <span className="flex items-center gap-1 text-primary">
@@ -1609,7 +1586,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       </div>
                       <p className="font-body-sm text-body-sm text-secondary mt-1">
-                        Wilayah: <strong>Jakarta Pusat - Hub Rasuna</strong> • PIC Pelaksana: <strong>Agus Setiawan (Lead)</strong>
+                        Wilayah: <strong>Belum ada data wilayah</strong> • PIC Pelaksana: <strong>Belum ditentukan</strong>
                       </p>
                       <div className="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant font-medium">
                         <span className="flex items-center gap-1 text-primary">
@@ -1863,16 +1840,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <label className="block font-label-md text-label-md text-on-surface font-semibold mb-1">
                       Penanggung Jawab (PIC Lead) <span className="text-error">*</span>
                     </label>
-                    <select
+                    <input
                       className="w-full px-3.5 py-2 rounded-DEFAULT bg-surface-container-low border border-outline-variant/40 focus:border-primary focus:bg-surface-container-lowest outline-none font-body-md text-on-surface cursor-pointer"
                       value={editPic}
                       onChange={(e) => setEditPic(e.target.value)}
-                    >
-                      <option value="Agus Setiawan, S.T.">Agus Setiawan, S.T. (Lead Teknisi Lapangan)</option>
-                      <option value="Dimas Ramadhan">Dimas Ramadhan (Teknisi Instrumentasi)</option>
-                      <option value="Rian Pratama">Rian Pratama (Spesialis Grounding)</option>
-                      <option value="Bambang Suherman">Bambang Suherman (Koordinator Elektrikal)</option>
-                    </select>
+                      placeholder="Masukkan PIC dari data nyata"
+                      type="text"
+                    />
                   </div>
                 </div>
               </div>

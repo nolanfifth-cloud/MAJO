@@ -7,68 +7,9 @@ interface LinkPortalViewProps {
   onConfigurationCompleted?: () => void;
 }
 
-const INITIAL_MASTER_LOCATIONS: string[] = [
-  'Medan - Hub Operasional',
-  'Batam - Pusat Distribusi',
-  'Pekanbaru - Depo',
-  'Jakarta Pusat (HQ)',
-  'Bandung - Hub Logistik',
-  'Surabaya - Hub Timur',
-  'Semarang - Depo Transit',
-  'Yogyakarta - Point Distribusi',
-  'Denpasar - Hub Bali & Nusa',
-  'Balikpapan - Hub Kalimantan',
-  'Makassar - Gateway Sulawesi',
-  'Palembang - Hub Sumbagsel',
-  'Malang - Kantor Operasional',
-  'Solo - Hub Logistik',
-  'Banjarmasin - Depo Selatan',
-  'Pontianak - Hub Kalbar',
-  'Manado - Gateway Minahasa',
-  'Lampung - Hub Transit Bakauheni',
-  'Cirebon - Depo Pantura',
-  'Samarinda - Hub Mahakam',
-  'Padang - Hub Pantai Barat',
-  'Jambi - Depo Muaro',
-];
-
-const INITIAL_REGIONS: RegionConfig[] = [
-  {
-    id: 'sor1',
-    name: 'SOR 1 (Sumatera Bagian Utara)',
-    locations: ['Medan - Hub Operasional', 'Batam - Pusat Distribusi', 'Pekanbaru - Depo'],
-  },
-  {
-    id: 'sor2',
-    name: 'SOR 2 (Jawa Barat & DKI Jakarta)',
-    locations: ['Jakarta Pusat (HQ)', 'Bandung - Hub Logistik'],
-  },
-];
-
-const INITIAL_STAFF_REQUESTS: StaffResetRequest[] = [
-  {
-    id: 'staff-1',
-    name: 'Bambang Haryanto',
-    username: '@bambang_mahardika',
-    role: 'Staf Lapangan',
-    location: 'Kantor Sudirman',
-    timeAgo: '10m lalu',
-    avatar: 'BH',
-    selected: true,
-    isReset: false,
-  },
-  {
-    id: 'staff-2',
-    name: 'Rian Pratama',
-    username: '@rian_p',
-    role: 'Gudang Logistik',
-    location: 'Cikarang',
-    timeAgo: '35m lalu',
-    avatar: 'RP',
-    selected: true,
-    isReset: false,
-  },
-];
+const INITIAL_MASTER_LOCATIONS: string[] = [];
+const INITIAL_REGIONS: RegionConfig[] = [];
+const INITIAL_STAFF_REQUESTS: StaffResetRequest[] = [];
 
 export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   onNavigateToDashboard,

@@ -141,7 +141,7 @@ export async function downloadPmReportExcel(target: PmItem): Promise<void> {
     target.doneCount,
     target.totalCount,
     new Date(),
-    'Super Admin Region Central',
+    'Belum ditentukan',
   ];
 
   sheet.addRow([]);
@@ -180,12 +180,7 @@ export async function downloadPmReportExcel(target: PmItem): Promise<void> {
   sheet.mergeCells(`E${detailStartRow}:L${detailStartRow}`);
   styleTableHeader(detailHeaderRow);
 
-  const modules = target.modules?.length ? target.modules : [
-    { name: 'Pemeriksaan Fisik Gardu & Transformator Utama', itemCount: 18 },
-    { name: 'Panel Distribusi Tegangan Menengah', itemCount: 14 },
-    { name: 'Sistem Proteksi & Grounding Earthing', itemCount: 12 },
-    { name: 'Fasilitas Proteksi Lingkungan & Baterai', itemCount: 12 },
-  ];
+  const modules = target.modules || [];
   const detailRows = modules.map((module, index) => [
     index + 1,
     module.name,

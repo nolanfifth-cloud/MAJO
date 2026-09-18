@@ -16,7 +16,7 @@ interface ProfileSettingsViewProps {
 export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
   onNavigateToDashboard,
   onLogout,
-  currentUser = { username: 'superadmin', name: 'Super Admin', role: 'admin' },
+  currentUser = { username: '', name: '', role: 'admin' },
 }) => {
   // Password Form States
   const [oldPassword, setOldPassword] = useState('');
@@ -296,7 +296,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
             </div>
             <h3 className="text-base font-bold text-slate-900 text-center">Konfirmasi Keluar Akun</h3>
             <p className="text-xs text-slate-500 text-center mt-1.5 leading-relaxed">
-              Apakah Anda yakin ingin keluar dari sesi Super Admin MAJO? Anda dapat masuk kembali kapan saja dengan
+              Apakah Anda yakin ingin keluar dari sesi admin MAJO? Anda dapat masuk kembali kapan saja dengan
               username dan kata sandi Anda.
             </p>
 
@@ -403,7 +403,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                       Nama Lengkap
                     </span>
                     <p className="text-base font-bold text-slate-900 mt-0.5">
-                      {currentUser.name || 'Super Admin'}
+                      {currentUser.name || 'Belum login'}
                     </p>
                     <span className="text-xs text-slate-500">Akun Administrator Utama Sistem</span>
                   </div>
@@ -451,7 +451,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                     </span>
                     <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
                       <span className="text-slate-400">@</span>
-                      <span>{currentUser.username || 'superadmin'}</span>
+                      <span>{currentUser.username || 'Belum login'}</span>
                     </div>
                   </div>
                   <div className="p-5 rounded-xl border border-slate-200/80 bg-white">

@@ -165,56 +165,9 @@ export interface PortalMasterConfig {
 const DEFAULT_PORTAL_ADDRESS = 'pt-majo-logistik-indo.majo.id';
 const DEFAULT_PORTAL_LINK = 'pt-majo-logistik-indo.majo.id';
 
-export const INITIAL_MASTER_WILAYAH: string[] = [
-  'Medan - Hub Operasional',
-  'Jakarta Pusat (HQ)',
-  'Bandung - Hub Logistik',
-  'Surabaya - Hub Timur',
-  'Batam - Pusat Distribusi',
-  'Pekanbaru - Depo',
-  'Semarang - Depo Transit',
-  'Denpasar - Hub Bali & Nusa',
-  'Makassar - Gateway Sulawesi',
-  'Balikpapan - Hub Kalimantan',
-];
-
-export const INITIAL_MASTER_GROUPS: RegionConfig[] = [
-  {
-    id: 'sor1',
-    name: 'SOR 1 (Sumatera Bagian Utara)',
-    locations: ['Medan - Hub Operasional', 'Batam - Pusat Distribusi', 'Pekanbaru - Depo'],
-  },
-  {
-    id: 'sor2',
-    name: 'SOR 2 (Jawa Barat & DKI Jakarta)',
-    locations: ['Jakarta Pusat (HQ)', 'Bandung - Hub Logistik'],
-  },
-];
-
-export const INITIAL_WORKFLOW_JOBS: WorkflowJob[] = [
-  {
-    id: 'pm-2026-sep-001',
-    code: 'PM-2026-SEP-001',
-    title: 'PM September 2026 – Inspeksi & Pemeliharaan Rutin Gardu & Hub Operasional Medan',
-    dateType: 'range',
-    startDate: '2026-09-01',
-    endDate: '2026-09-28',
-    dates: '01 Sep 2026 – 28 Sep 2026',
-    areaType: 'wilayah',
-    targetArea: 'Medan - Hub Operasional',
-    targetWilayahList: ['Medan - Hub Operasional'],
-    pic: 'Agus Setiawan, S.T.',
-    picRole: 'Lead Teknisi Lapangan',
-    isSubmitted: false,
-    progress: 65,
-    subJobs: [
-      { id: 1, title: 'Daftar Jobs 1: Cek Catu Daya Gardu & Trafo', pmType: 'ups' },
-      { id: 2, title: 'Daftar Jobs 2: Inspeksi Suhu & Rak Server', pmType: 'suhu_ruangan' },
-      { id: 3, title: 'Daftar Jobs 3: PAC & Pendingin Ruang Gedung', pmType: 'pac_ac' },
-      { id: 4, title: 'Daftar Jobs 4: Proteksi Kebakaran (APAR)', pmType: 'fire_extinguisher' },
-    ],
-  },
-];
+export const INITIAL_MASTER_WILAYAH: string[] = [];
+export const INITIAL_MASTER_GROUPS: RegionConfig[] = [];
+export const INITIAL_WORKFLOW_JOBS: WorkflowJob[] = [];
 
 // Helper methods with localStorage fallback
 export function getPortalConfig(): PortalMasterConfig {
@@ -229,7 +182,7 @@ export function getPortalConfig(): PortalMasterConfig {
   return {
     portalAddress: DEFAULT_PORTAL_ADDRESS,
     portalLink: DEFAULT_PORTAL_LINK,
-    isActivated: true,
+    isActivated: false,
     masterWilayah: INITIAL_MASTER_WILAYAH,
     masterGroups: INITIAL_MASTER_GROUPS,
   };
@@ -252,7 +205,7 @@ export function getWorkflowJobs(): WorkflowJob[] {
   } catch {
     // fallback
   }
-  return INITIAL_WORKFLOW_JOBS;
+  return [];
 }
 
 export function saveWorkflowJobs(jobs: WorkflowJob[]) {

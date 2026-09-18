@@ -22,8 +22,8 @@ export interface ProfilTeknisiViewProps {
 }
 
 export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
-  displayName = 'Agus Setiawan, S.T.',
-  displayUsername = 'user1',
+  displayName = 'Pengguna',
+  displayUsername = '',
   userInitials = 'U1',
   onTriggerToast,
   onOpenLogoutModal,

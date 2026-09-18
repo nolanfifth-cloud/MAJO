@@ -20,10 +20,10 @@ export default function App() {
     role: 'admin' | 'user';
     location?: string;
   }>({
-    username: 'user1',
-    name: 'Agus Setiawan, S.T.',
+    username: '',
+    name: '',
     role: 'user',
-    location: 'Medan - Hub Operasional',
+    location: '',
   });
 
   const handleRegisterSuccess = (account: RegisteredAccount) => {

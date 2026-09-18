@@ -66,10 +66,10 @@ interface UserDashboardProps {
 export const UserDashboard: React.FC<UserDashboardProps> = ({
   onNavigate,
   currentUser = {
-    username: 'user1',
-    name: 'user1',
+    username: '',
+    name: '',
     role: 'user',
-    location: 'Medan – Hub Operasional',
+    location: '',
   },
 }) => {
   // Navigation & Sub-views state
@@ -82,7 +82,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   const [isTaskCardExpanded, setIsTaskCardExpanded] = useState(true);
 
   // Active Job Tab
-  const [currentJobId, setCurrentJobId] = useState<number>(1);
+  const [currentJobId, setCurrentJobId] = useState<number>(0);
 
   // Toast notification state
   const [toast, setToast] = useState<{ show: boolean; message: string; isSuccess: boolean }>({
@@ -98,102 +98,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     }, 3000);
   };
 
-  // Jobs Database initial state matching the user's HTML template
-  const [jobsDatabase, setJobsDatabase] = useState<Record<number, JobTabItem>>({
-    1: {
-      id: 1,
-      title: 'Daftar Jobs 1: Cek Catu Daya Gardu & UPS',
-      pmType: 'ups',
-      devices: [
-        {
-          id: 'dev_1_1',
-          location: 'Gardu Induk Trafo Hub #01 - Sayap Barat',
-          expanded: true,
-          statusState: 'DONE',
-          formData: {
-            photo: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=300&auto=format&fit=crop&q=60',
-            photoName: 'trafo_panel_check_01.jpg',
-            status: 'normal',
-            keterangan: 'Tegangan stabil 220V, tidak ada dengung berlebih atau kenaikan suhu isolator.',
-            durasi: '35',
-          },
-        },
-        {
-          id: 'dev_1_2',
-          location: 'Panel Distribusi Utama LV-04',
-          expanded: false,
-          statusState: 'INITIAL',
-          formData: {
-            photo: '',
-            photoName: '',
-            status: '',
-            keterangan: '',
-            durasi: '',
-          },
-        },
-      ],
-    },
-    2: {
-      id: 2,
-      title: 'Daftar Jobs 2: Inspeksi Suhu & PAC Ruang Server',
-      pmType: 'suhu_ruangan',
-      devices: [
-        {
-          id: 'dev_2_1',
-          location: 'Server Room Enclosure Rak 02',
-          expanded: true,
-          statusState: 'INITIAL',
-          formData: {
-            photo: '',
-            photoName: '',
-            status: 'normal',
-            keterangan: 'Suhu ruangan 19°C konstan.',
-            durasi: '20',
-          },
-        },
-      ],
-    },
-    3: {
-      id: 3,
-      title: 'Daftar Jobs 3: Proteksi Fire Extinguisher & APAR',
-      pmType: 'fire_extinguisher',
-      devices: [
-        {
-          id: 'dev_3_1',
-          location: 'Ruang Genset Luar - Ground Floor',
-          expanded: true,
-          statusState: 'INITIAL',
-          formData: {
-            photo: '',
-            photoName: '',
-            status: '',
-            keterangan: '',
-            durasi: '',
-          },
-        },
-      ],
-    },
-    4: {
-      id: 4,
-      title: 'Daftar Jobs 4: Validasi BAST & Rak Server',
-      pmType: 'rack_server',
-      devices: [
-        {
-          id: 'dev_4_1',
-          location: 'Kotak Segel Terminal BAST Utama',
-          expanded: true,
-          statusState: 'INITIAL',
-          formData: {
-            photo: '',
-            photoName: '',
-            status: '',
-            keterangan: '',
-            durasi: '',
-          },
-        },
-      ],
-    },
-  });
+  // Jobs are loaded from real admin assignments; no demo records are seeded.
+  const [jobsDatabase, setJobsDatabase] = useState<Record<number, JobTabItem>>({});
 
   // Submission & Confirmation modal states
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
@@ -260,9 +166,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     setShowSubmitModal(false);
 
     const submittedReport = {
-      id: `PM-2026-SEP-001`,
-      year: 2026,
-      title: 'PM September 2026 – Inspeksi & Pemeliharaan Rutin Gardu & Hub Operasional Medan',
+      id: `PM-${new Date().getFullYear()}-${Date.now()}`,
+      year: new Date().getFullYear(),
+      title: activeJob.title,
       completedAt:
         new Date().toLocaleDateString('id-ID', {
           day: '2-digit',
@@ -270,8 +176,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           year: 'numeric',
         }) +
         `, ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB`,
-      period: '01 Sep 2026 – 28 Sep 2026',
-      region: currentUser?.location || 'Medan – Hub Operasional',
+      period: new Date().toLocaleDateString('id-ID'),
+      region: currentUser?.location || '',
       subJobsCount: Object.keys(jobsDatabase).length,
       pointsCount: allDevices.length,
       subJobs: (Object.values(jobsDatabase) as JobTabItem[]).flatMap((job, idx) =>
@@ -303,8 +209,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   // Current active job
   const activeJob = jobsDatabase[currentJobId] || {
     id: currentJobId,
-    title: `Daftar Jobs ${currentJobId}`,
-    pmType: 'ups',
+    title: 'Belum ada penugasan dari admin',
     devices: [],
   };
 
@@ -481,9 +386,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   };
 
   // User details
-  const displayUsername = currentUser.username || 'user1';
-  const displayName =
-    currentUser.name && currentUser.name !== 'user1' ? currentUser.name : 'Agus Setiawan, S.T.';
+  const displayUsername = currentUser.username || 'Belum login';
+  const displayName = currentUser.name || 'Pengguna';
   const userInitials = displayUsername.slice(0, 2).toUpperCase();
 
   return (
@@ -800,13 +704,15 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                         <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-800 text-xs font-bold uppercase tracking-wider">
                           Tugas Aktif Admin
                         </span>
-                        <span className="text-xs font-semibold text-slate-400">ID: PM-2026-SEP-001</span>
+                        <span className="text-xs font-semibold text-slate-400">
+                          ID: {jobsDatabase[currentJobId]?.id || 'Belum tersedia'}
+                        </span>
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-semibold">
-                          <Clock className="w-3 h-3 text-amber-600" /> Sisa 14 Hari Kalender
+                          <Clock className="w-3 h-3 text-amber-600" /> Tenggat mengikuti penugasan admin
                         </span>
                       </div>
                       <h2 className="text-lg md:text-xl font-extrabold text-slate-900 group-hover:text-slate-800 transition-colors">
-                        PM September 2026 – Inspeksi &amp; Pemeliharaan Rutin Gardu &amp; Hub Operasional Medan
+                        {activeJob.title}
                       </h2>
                       <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-600">
                         <div className="flex items-center gap-1.5 font-medium">

@@ -41,8 +41,8 @@ export interface CompletedPMItem {
   subJobs: SubJobDetail[];
 }
 
-// 24+ Item Dataset PM 100% Selesai Sesuai Template MAJO
-const pmCompletedData: CompletedPMItem[] = [
+// Completed reports are loaded from localStorage after real user submissions.
+const pmCompletedData: CompletedPMItem[] = []; /*
   {
     id: 'PM-2026-SEP-001',
     year: 2026,
@@ -583,7 +583,7 @@ const pmCompletedData: CompletedPMItem[] = [
       },
     ],
   },
-];
+]; */
 
 interface RiwayatSelesaiViewProps {
   onTriggerToast: (message: string, isSuccess?: boolean) => void;
@@ -644,7 +644,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
     return () => clearInterval(interval);
   }, []);
 
-  // Combine default dataset with user-submitted reports from localStorage
+  // Load only user-submitted reports from localStorage.
   const allPmItems = useMemo(() => {
     try {
       const stored = localStorage.getItem('majo_completed_reports');
@@ -684,6 +684,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
 
   // Pagination calculation
   const totalItems = filteredData.length;
+  const totalPoints = filteredData.reduce((sum, item) => sum + item.pointsCount, 0);
   const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
   const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
 
@@ -752,7 +753,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
               Total PM Diselesaikan
             </span>
             <div className="text-2xl font-black text-[#0C1B33] mt-1 flex items-baseline gap-1.5">
-              <span>24</span>
+              <span>{totalItems}</span>
               <span className="text-xs font-semibold text-emerald-600">Penugasan</span>
             </div>
           </div>
@@ -768,7 +769,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
               TOTAL Perangkat Diperiksa
             </span>
             <div className="text-2xl font-black text-[#0C1B33] mt-1 flex items-baseline gap-1.5">
-              <span>198</span>
+              <span>{totalPoints}</span>
               <span className="text-xs font-semibold text-blue-600">Perangkat yang diperiksa</span>
             </div>
           </div>
@@ -839,10 +840,10 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
                 onChange={(e) => setFilterYear(e.target.value)}
                 className="w-full pl-3.5 pr-9 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-blue-600 text-slate-700 font-medium appearance-none cursor-pointer whitespace-nowrap"
               >
-                <option value="all">Semua Periode (24 Tugas)</option>
-                <option value="2026">Tahun 2026</option>
-                <option value="2025">Tahun 2025</option>
-                <option value="2024">Tahun 2024</option>
+                <option value="all">Semua Periode ({allPmItems.length} Tugas)</option>
+                {Array.from(new Set(allPmItems.map((item) => item.year))).sort((a, b) => Number(b) - Number(a)).map((year) => (
+                  <option key={year} value={year}>Tahun {year}</option>
+                ))}
               </select>
               <ChevronDown className="w-3.5 h-3.5 absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>

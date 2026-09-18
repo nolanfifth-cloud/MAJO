@@ -13,67 +13,19 @@ interface Branch {
   checked: boolean;
 }
 
-const INITIAL_ITEMS: ChecklistItem[] = [
-  {
-    id: 'item-1',
-    text: 'Cek kuota stok fisik vs data sistem portal & fisik segel boks',
-    hasPhoto: true,
-    conditionText: 'Kondisi: Sesuai / Selisih',
-    hasTimestamp: true,
-    notesText: '',
-  },
-  {
-    id: 'item-2',
-    text: 'Dokumentasi foto kondisi rak, suhu termal & segel kabel incoming',
-    hasPhoto: true,
-    conditionText: 'Kondisi: Normal / Tidak Normal',
-    hasTimestamp: false,
-    notesText: 'Catatan Anomali',
-  },
-  {
-    id: 'item-3',
-    text: 'Inspeksi kebersihan filter sirkulasi pendingin dan grounding',
-    hasPhoto: false,
-    conditionText: 'Kondisi: Bersih / Perlu Servis',
-    hasTimestamp: false,
-    notesText: '',
-  },
-  {
-    id: 'item-4',
-    text: 'Validasi Berita Acara Serah Terima (BAST) fisik & barcode inventaris',
-    hasPhoto: true,
-    conditionText: 'Kondisi: Lengkap / Kurang',
-    hasTimestamp: false,
-    notesText: '',
-  },
-  {
-    id: 'item-5',
-    text: 'Simulasi start genset otomatis 10kVA & tegangan aki',
-    hasPhoto: true,
-    conditionText: 'Pilihan: Normal (220V) / Drop / Gagal',
-    hasTimestamp: false,
-    notesText: '',
-  },
-];
-
-const INITIAL_BRANCHES: Branch[] = [
-  { id: 'medan', name: 'Medan – Hub Operasional & Kantor Wilayah', regionKey: 'sor1', checked: true },
-  { id: 'batam', name: 'Batam – Pusat Distribusi & Logistik', regionKey: 'sor1', checked: true },
-  { id: 'pekanbaru', name: 'Pekanbaru – Depo Logistik Cadangan', regionKey: 'sor1', checked: false },
-  { id: 'jakarta', name: 'Jakarta Pusat – Headquarter Hub', regionKey: 'sor2', checked: true },
-  { id: 'bandung', name: 'Bandung – Hub Logistik & Gardu Induk', regionKey: 'sor2', checked: true },
-];
+const INITIAL_ITEMS: ChecklistItem[] = [];
+const INITIAL_BRANCHES: Branch[] = [];
 
 export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   onNavigateToDashboard,
   onJobCreated,
 }) => {
   // State
-  const [jobTitle, setJobTitle] = useState('Audit Operasional Lapangan Q2 & Pemeliharaan Preventif Hub');
-  const [startDate, setStartDate] = useState('2026-05-15');
-  const [endDate, setEndDate] = useState('2026-05-28');
+  const [jobTitle, setJobTitle] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [slaEnabled, setSlaEnabled] = useState(true);
-  const [conditionOptions, setConditionOptions] = useState<string[]>(['Normal', 'Tidak Normal']);
+  const [conditionOptions, setConditionOptions] = useState<string[]>([]);
   const [items, setItems] = useState<ChecklistItem[]>(INITIAL_ITEMS);
   const [branches, setBranches] = useState<Branch[]>(INITIAL_BRANCHES);
 
@@ -255,13 +207,13 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
 
   // Reset Form
   const handleResetForm = () => {
-    setJobTitle('Audit Operasional Lapangan Q2 & Pemeliharaan Preventif Hub');
-    setStartDate('2026-05-15');
-    setEndDate('2026-05-28');
+    setJobTitle('');
+    setStartDate('');
+    setEndDate('');
     setSlaEnabled(true);
     setBranches(INITIAL_BRANCHES);
     setItems(INITIAL_ITEMS);
-    setConditionOptions(['Normal', 'Tidak Normal']);
+    setConditionOptions([]);
     setIsResetModalOpen(false);
     showToast('Formulir berhasil direset ke pengaturan default.', 'info');
   };
@@ -293,13 +245,13 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       const selectedBranchNames = branches.filter((b) => b.checked).map((b) => b.name.split('–')[0].trim());
       const newPm: PmItem = {
         id: `pm-${Date.now()}`,
-        code: 'PM-2026-Q2-AUTO',
+        code: `PM-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`,
         title: jobTitle.trim(),
         dates: `${startDate} - ${endDate}`,
         startDate: startDate,
         endDate: endDate,
-        pic: 'Agus Setiawan, S.T.',
-        picRole: 'Lead Teknisi Lapangan',
+        pic: '',
+        picRole: '',
         progress: 0,
         doneCount: 0,
         totalCount: items.length,
@@ -312,9 +264,9 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
           color: 'bg-primary',
         })),
         recentLog: {
-          name: 'Super Admin',
-          avatar: 'SA',
-          activity: 'Instrumen pekerjaan baru siap diakses tim teknisi.',
+          name: '',
+          avatar: '',
+          activity: 'Pekerjaan baru siap diakses tim teknisi.',
           time: 'Baru saja',
         },
         modules: items.map((i) => ({
@@ -524,7 +476,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
             <div className="flex flex-col gap-3">
               <div className="p-3.5 bg-secondary-fixed/50 rounded-DEFAULT text-on-secondary-fixed font-body-sm space-y-1">
                 <p>
-                  <strong>Referensi Job:</strong> PM-2026-Q2-AUTO
+                  <strong>Referensi Job:</strong> {`PM-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`}
                 </p>
                 <p>
                   <strong>Judul:</strong> {jobTitle}
@@ -604,7 +556,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   </span>
                 </div>
                 <span className="px-2.5 py-1 rounded-DEFAULT bg-surface-container font-code-otp text-body-sm text-primary font-bold">
-                  PM-2026-Q2-AUTO
+                  Nomor referensi dibuat otomatis saat pekerjaan diterbitkan.
                 </span>
               </div>
               <div className="flex flex-col gap-2">
