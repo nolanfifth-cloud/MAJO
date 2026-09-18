@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
-import { AuthView } from '../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { AuthView, PmItem } from '../types';
 import { RiwayatSelesaiView } from './RiwayatSelesaiView';
 import { ProfilTeknisiView } from './ProfilTeknisiView';
 import { isCloudinaryConfigured, uploadPhotoToCloudinary } from '../services/cloudinary';
+import { loadAdminJobsFromFirestore, saveCompletedReportToFirestore } from '../services/firestoreStore';
 import {
   ListChecks,
   Clock,
@@ -56,6 +57,7 @@ interface JobTabItem {
 interface UserDashboardProps {
   onNavigate: (view: AuthView) => void;
   currentUser?: {
+    uid?: string;
     username: string;
     name?: string;
     role?: 'admin' | 'user';
@@ -66,6 +68,7 @@ interface UserDashboardProps {
 export const UserDashboard: React.FC<UserDashboardProps> = ({
   onNavigate,
   currentUser = {
+    uid: undefined,
     username: '',
     name: '',
     role: 'user',
@@ -100,6 +103,41 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   // Jobs are loaded from real admin assignments; no demo records are seeded.
   const [jobsDatabase, setJobsDatabase] = useState<Record<number, JobTabItem>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAdminJobsFromFirestore().then((jobs) => {
+      if (cancelled || jobs.length === 0) return;
+      const assignedJobs = jobs.reduce<Record<number, JobTabItem>>((result, job: PmItem, index) => {
+        result[index + 1] = {
+          id: index + 1,
+          title: job.title,
+          pmType: job.modules?.[0]?.name,
+          devices: (job.modules || []).map((module, moduleIndex) => ({
+            id: `${job.id}_${moduleIndex + 1}`,
+            location: job.regions,
+            expanded: moduleIndex === 0,
+            statusState: 'INITIAL',
+            formData: {
+              photo: '',
+              photoName: '',
+              status: '',
+              keterangan: '',
+              durasi: '',
+            },
+          })),
+        };
+        return result;
+      }, {});
+      setJobsDatabase(assignedJobs);
+      setCurrentJobId(1);
+    }).catch(() => {
+      // No cloud assignments are available yet.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Submission & Confirmation modal states
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
@@ -199,6 +237,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       const existing = localStorage.getItem('majo_completed_reports');
       const list = existing ? JSON.parse(existing) : [];
       localStorage.setItem('majo_completed_reports', JSON.stringify([submittedReport, ...list]));
+      void saveCompletedReportToFirestore(submittedReport as Record<string, unknown>, currentUser?.uid).catch(() => {
+        // localStorage remains the fallback when cloud persistence fails.
+      });
     } catch {
       // fallback
     }
@@ -611,61 +652,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               </button>
             </div>
 
-            {/* KPI Box: Progres Tugas PM Anda / Ringkasan Riwayat Selesai / Status Akun Teknisi */}
-            {activeMenu === 'profil' ? (
-              <div className="mt-8 bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                <div className="flex items-center justify-between text-xs text-slate-500 font-medium mb-1">
-                  <span>Status Akun Teknisi</span>
-                  <span className="font-bold text-emerald-600 flex items-center">
-                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Terverifikasi
-                  </span>
-                </div>
-                <div className="text-lg font-black text-[#0C1B33] tracking-tight">
-                  {displayName}
-                </div>
-                <div className="text-xs text-slate-500 font-mono mt-0.5">Unit TI</div>
-                <div className="w-full bg-slate-200 h-1.5 rounded-full mt-3 overflow-hidden">
-                  <div className="bg-emerald-500 h-full rounded-full w-full"></div>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-2.5 leading-relaxed">
-                  Terotentikasi penuh dengan hak akses inspeksi lapangan regional Medan.
-                </p>
-              </div>
-            ) : activeMenu === 'riwayat' ? (
-              <div className="mt-8 bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                <div className="flex items-center justify-between text-xs text-slate-500 font-medium mb-1">
-                  <span>Tugas PM yang selesai</span>
-                  <span className="font-bold text-emerald-600">100%</span>
-                </div>
-                <div className="text-2xl font-black text-[#0C1B33] tracking-tight" id="sidebar-pm-count">
-                  24 Tugas
-                </div>
-                <div className="w-full bg-slate-200 h-2 rounded-full mt-2 overflow-hidden">
-                  <div className="bg-emerald-500 h-full rounded-full w-full"></div>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-2.5 leading-relaxed">
-                  Semua checklist verifikasi lapangan telah dikirim dan diarsipkan resmi.
-                </p>
-              </div>
-            ) : (
-              <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-2xl">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-900 mb-1.5">
-                  <span>Progres Tugas PM Anda</span>
-                  <span className="text-slate-900 font-black">{progressPercentage}%</span>
-                </div>
-                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden mb-2">
-                  <div
-                    className="h-full bg-slate-900 rounded-full transition-all duration-500"
-                    style={{ width: `${progressPercentage}%` }}
-                  ></div>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-tight">
-                  {isFullyCompleted
-                    ? 'Seluruh checklist telah 100% selesai diperiksa!'
-                    : `${completedDevicesCount} dari ${totalDevicesCount} titik checklist telah selesai.`}
-                </p>
-              </div>
-            )}
           </div>
 
           {/* Bottom System Status */}

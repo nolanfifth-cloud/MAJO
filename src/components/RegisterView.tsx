@@ -5,7 +5,7 @@ import {
   savePortalConfig,
   validatePortalAddress,
 } from '../services/workflowStore';
-import { isFirebaseConfigured, registerAdminWithFirebase } from '../services/firebase';
+import { isFirebaseConfigured, registerAccountWithFirebase } from '../services/firebase';
 
 const LOGO_URL = '/assets/logo%20MAJO.png';
 
@@ -83,8 +83,8 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       setErrorMsg('Harap masukkan nama lengkap Anda.');
       return;
     }
-    if (role === 'admin' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setErrorMsg('Harap masukkan alamat email admin yang valid.');
+    if (isFirebaseConfigured && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErrorMsg(`Harap masukkan alamat email ${role === 'admin' ? 'admin' : 'akun'} yang valid.`);
       return;
     }
     if (!username.trim()) {
@@ -129,7 +129,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       const newAccount: RegisteredAccount = {
         name: name.trim(),
         username: username.trim().toLowerCase(),
-        email: role === 'admin' ? email.trim().toLowerCase() : undefined,
+        email: email.trim().toLowerCase() || undefined,
         password,
         role,
         portalAddress:
@@ -140,8 +140,8 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         createdAt: new Date().toISOString(),
       };
 
-      if (role === 'admin' && isFirebaseConfigured) {
-        await registerAdminWithFirebase(newAccount, password);
+      if (isFirebaseConfigured) {
+        await registerAccountWithFirebase(newAccount, password);
       } else {
         const stored = localStorage.getItem('majo_accounts');
         const accounts = stored ? JSON.parse(stored) : [];
@@ -555,11 +555,11 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                 </div>
               </div>
 
-              {role === 'admin' && (
+              {(role === 'admin' || isFirebaseConfigured) && (
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label htmlFor="reg-email" className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      ALAMAT EMAIL ADMIN
+                      {role === 'admin' ? 'ALAMAT EMAIL ADMIN' : 'ALAMAT EMAIL AKUN'}
                     </label>
                     <span className="text-[10px] font-semibold text-rose-500">Wajib Diisi</span>
                   </div>

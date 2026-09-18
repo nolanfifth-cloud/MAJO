@@ -18,6 +18,7 @@ import {
   CheckCheck,
   Check,
 } from 'lucide-react';
+import { loadCompletedReportsFromFirestore } from '../services/firestoreStore';
 
 export interface SubJobDetail {
   name: string;
@@ -595,6 +596,19 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
   const [filterYear, setFilterYear] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 10;
+  const [cloudReports, setCloudReports] = useState<CompletedPMItem[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCompletedReportsFromFirestore().then((reports) => {
+      if (!cancelled) setCloudReports(reports as unknown as CompletedPMItem[]);
+    }).catch(() => {
+      // Local reports remain available when Firestore is unavailable.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // State for expanded PM cards
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({
@@ -652,15 +666,17 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
         const parsed: CompletedPMItem[] = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
           // Remove duplicates if any
-          const existingIds = new Set(parsed.map((p) => p.id));
-          return [...parsed, ...pmCompletedData.filter((p) => !existingIds.has(p.id))];
+          const combined = [...cloudReports, ...parsed];
+          const unique = Array.from(new Map(combined.map((report) => [report.id, report])).values());
+          return unique;
         }
       }
+      if (cloudReports.length > 0) return cloudReports;
     } catch {
       // fallback
     }
     return pmCompletedData;
-  }, []);
+  }, [cloudReports]);
 
   // Filter Data
   const filteredData = useMemo(() => {

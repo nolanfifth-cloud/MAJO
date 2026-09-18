@@ -4,6 +4,8 @@ import { CreateJobsView } from './CreateJobsView';
 import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
 import { downloadPmReportExcel } from '../services/excelExport';
+import { getPortalConfig } from '../services/workflowStore';
+import { loadAdminJobsFromFirestore, saveAdminJobToFirestore } from '../services/firestoreStore';
 
 interface AdminDashboardProps {
   onNavigate: (view: AuthView) => void;
@@ -99,6 +101,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return false;
     }
   });
+  const [hasConfiguredLocation, setHasConfiguredLocation] = useState<boolean>(() => {
+    try {
+      const config = getPortalConfig();
+      return config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0);
+    } catch {
+      return false;
+    }
+  });
   const [showWarningBanner, setShowWarningBanner] = useState<boolean>(() => {
     try {
       return localStorage.getItem('majo_portal_configured') !== 'true';
@@ -111,9 +121,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     try {
       const portalConfigured = localStorage.getItem('majo_portal_configured') === 'true';
+      const portalConfig = getPortalConfig();
+      const hasLocation =
+        portalConfig.masterWilayah.length > 0 ||
+        portalConfig.masterGroups.some((group) => group.locations.length > 0);
+      setHasConfiguredLocation(hasLocation);
       if (portalConfigured) {
         setIsPortalConfigured(true);
-        setShowWarningBanner(false);
+        setShowWarningBanner(!hasLocation);
       }
 
       let baseList = [...INITIAL_PMS];
@@ -162,6 +177,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch {
       // Ignore parse errors
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAdminJobsFromFirestore().then((cloudJobs) => {
+      if (!cancelled && cloudJobs.length > 0) {
+        setPmList(cloudJobs);
+        setSelectedPmId(cloudJobs[0].id);
+      }
+    }).catch(() => {
+      // Local jobs remain available when Firestore is unavailable.
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Active navigation tab in sidebar
@@ -589,6 +619,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onJobCreated={(newPm) => {
                 setPmList((prev) => {
                   const updated = [newPm, ...prev];
+                  void saveAdminJobToFirestore(newPm, currentUser?.username).catch(() => {
+                    // localStorage remains the fallback when cloud persistence fails.
+                  });
                   try {
                     const saved = localStorage.getItem('majo_admin_created_jobs');
                     const existing = saved ? JSON.parse(saved) : [];
@@ -612,6 +645,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onNavigateToCreateJobs={() => setActiveNav('create-jobs')}
               onConfigurationCompleted={() => {
                 setIsPortalConfigured(true);
+                setHasConfiguredLocation(true);
                 setShowWarningBanner(false);
                 try {
                   localStorage.setItem('majo_portal_configured', 'true');
@@ -675,7 +709,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
             {/* Warning Banner (Displayed when in initialization mode or toggled) */}
-            {showWarningBanner && pmList.length === 0 && !isPortalConfigured && (
+            {showWarningBanner && (!isPortalConfigured || !hasConfiguredLocation) && (
               <div className="p-4 rounded-DEFAULT bg-surface-container-lowest border border-tertiary/40 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-in fade-in">
                 <div className="flex items-start gap-3.5">
                   <div className="p-2 rounded-lg bg-tertiary-fixed/40 text-tertiary shrink-0 mt-0.5">
@@ -684,15 +718,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div>
                     <div className="flex items-center gap-2">
                       <h4 className="font-label-md font-bold text-on-surface">
-                        Perhatian: Lengkapi Konfigurasi Struktur Organisasi & Lokasi
+                        Wajib: Lengkapi Link Portal & Lokasi Operasional
                       </h4>
                       <span className="px-2 py-0.5 rounded bg-tertiary-fixed text-on-tertiary-fixed font-label-sm text-[10px] font-bold uppercase tracking-wider">
                         ACTION REQUIRED
                       </span>
                     </div>
                     <p className="text-body-sm text-secondary mt-0.5">
-                      Sistem mendeteksi data skema wilayah dan titik lokasi kerja belum dikonfigurasi. Lengkapi data di menu
-                      Link Portal agar Anda dapat mulai membuat tugas (Create Jobs) serta membagikan tautan pendaftaran ke teknisi / tim lapangan.
+                      Anda belum dapat membagikan tautan pendaftaran. Lengkapi Link Portal dan tambahkan minimal satu lokasi operasional terlebih dahulu agar tautan staf terbuka.
                     </p>
                   </div>
                 </div>
@@ -704,21 +737,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     <span className="material-symbols-outlined text-[16px]">hub</span>
                     <span>Buka Link Portal →</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowWarningBanner(false);
-                      setIsPortalConfigured(true);
-                      try {
-                        localStorage.setItem('majo_portal_configured', 'true');
-                      } catch {
-                        // Ignore
-                      }
-                    }}
-                    className="text-xs text-secondary hover:text-on-surface font-medium cursor-pointer"
-                  >
-                    Nanti saja
                   </button>
                 </div>
               </div>

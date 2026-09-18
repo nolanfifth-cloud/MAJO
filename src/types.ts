@@ -3,6 +3,7 @@ export type AuthView = 'login' | 'register' | 'forgot_password' | 'admin_dashboa
 export type UserRole = 'admin' | 'user';
 
 export interface RegisteredAccount {
+  uid?: string;
   name: string;
   username: string;
   email?: string;

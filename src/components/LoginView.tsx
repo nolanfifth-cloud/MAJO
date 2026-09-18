@@ -7,7 +7,7 @@ const LOGO_URL = '/assets/logo%20MAJO.png';
 interface LoginViewProps {
   onNavigate: (view: AuthView) => void;
   prefilledUsername?: string;
-  onLoginSuccess?: (user: { username: string; name?: string; role: 'admin' | 'user' }) => void;
+  onLoginSuccess?: (user: { uid?: string; username: string; name?: string; role: 'admin' | 'user' }) => void;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
@@ -70,7 +70,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       setLoggedInRole(role);
 
       if (onLoginSuccess) {
-        onLoginSuccess({ username: foundAccount.username, name: displayName, role });
+        onLoginSuccess({ uid: foundAccount.uid, username: foundAccount.username, name: displayName, role });
       }
 
       // Navigate to appropriate dashboard based on user role

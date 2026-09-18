@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { RegionConfig, StaffResetRequest } from '../types';
+import { getPortalConfig, savePortalConfig } from '../services/workflowStore';
+import { hasRealPortalLocation, loadPortalConfigFromFirestore, savePortalConfigToFirestore } from '../services/firestoreStore';
 
 interface LinkPortalViewProps {
   onNavigateToDashboard?: () => void;
@@ -30,6 +32,24 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     }
   });
   const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  const hasConfiguredLocation = masterLocations.length > 0 || regions.some((region) => region.locations.length > 0);
+  const isPortalReady = isPortalActivated && hasConfiguredLocation;
+
+  useEffect(() => {
+    let cancelled = false;
+    loadPortalConfigFromFirestore().then((config) => {
+      if (!config || cancelled) return;
+      setMasterLocations(config.masterWilayah || []);
+      setRegions(config.masterGroups || []);
+      setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
+    }).catch(() => {
+      // Local configuration remains available when the cloud is unreachable.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // State: Master Lokasi Search & Pagination
   const [flatSearchQuery, setFlatSearchQuery] = useState<string>('');
@@ -122,8 +142,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   // Copy Link to Clipboard
   const handleCopyLink = () => {
-    if (!isPortalActivated) {
-      showToast('Tautan belum aktif! Harap klik "Simpan & Aktifkan Link Portal" terlebih dahulu.', 'info');
+    if (!isPortalReady) {
+      showToast('Tautan terkunci! Tambahkan minimal 1 lokasi lalu simpan konfigurasi portal terlebih dahulu.', 'info');
       return;
     }
     const url = 'portal.majo.id/org/pt-majo-logistik-indo';
@@ -135,11 +155,31 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   // Save / Activate Portal
   const handleSavePortal = () => {
+    if (!hasConfiguredLocation) {
+      setIsPortalActivated(false);
+      showToast('Belum dapat diaktifkan. Tambahkan minimal 1 lokasi operasional terlebih dahulu.', 'info');
+      return;
+    }
     setIsSaving(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       setIsSaving(false);
       setIsPortalActivated(true);
       try {
+        const currentConfig = getPortalConfig();
+        savePortalConfig({
+          ...currentConfig,
+          portalAddress: currentConfig.portalAddress,
+          portalLink: currentConfig.portalLink,
+          isActivated: true,
+          masterWilayah: masterLocations,
+          masterGroups: regions,
+        });
+        await savePortalConfigToFirestore({
+          ...currentConfig,
+          isActivated: true,
+          masterWilayah: masterLocations,
+          masterGroups: regions,
+        });
         localStorage.setItem('majo_portal_configured', 'true');
       } catch {
         // Ignore
@@ -877,18 +917,18 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               onClick={handleSavePortal}
               disabled={isSaving}
               className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-DEFAULT font-label-md text-label-md shadow-xs transition-all cursor-pointer ${
-                isPortalActivated
+                isPortalReady
                   ? 'bg-tertiary-container text-on-tertiary-container'
                   : 'bg-primary hover:bg-primary-container text-on-primary'
               }`}
             >
               <span className="material-symbols-outlined text-[18px]">
-                {isSaving ? 'sync' : isPortalActivated ? 'check' : 'verified'}
+                {isSaving ? 'sync' : isPortalReady ? 'check' : 'verified'}
               </span>
               <span>
                 {isSaving
                   ? 'Menyimpan...'
-                  : isPortalActivated
+                  : isPortalReady
                   ? 'Tersimpan & Aktif'
                   : 'Simpan & Aktifkan Link Portal'}
               </span>
@@ -921,17 +961,17 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
                 <span
                   className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-label-sm text-label-sm transition-colors font-bold ${
-                    isPortalActivated
+                    isPortalReady
                       ? 'bg-tertiary-fixed text-on-tertiary-fixed'
                       : 'bg-error-container text-on-error-container'
                   }`}
                   id="portalBadgeLock"
                 >
                   <span className="material-symbols-outlined text-[14px]" id="portalBadgeLockIcon">
-                    {isPortalActivated ? 'check_circle' : 'lock'}
+                    {isPortalReady ? 'check_circle' : 'lock'}
                   </span>
                   <span id="portalBadgeLockText">
-                    {isPortalActivated ? 'Aktif & Terverifikasi' : 'Terkunci Sementara'}
+                    {isPortalReady ? 'Aktif & Terverifikasi' : 'Terkunci Sementara'}
                   </span>
                 </span>
               </div>
@@ -956,13 +996,13 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   id="copyLinkBtn"
                   onClick={handleCopyLink}
                   className={`px-5 py-3 rounded-DEFAULT font-label-md text-label-md inline-flex items-center justify-center gap-2 transition-all select-none ${
-                    isPortalActivated
+                    isPortalReady
                       ? 'bg-primary hover:bg-primary-container text-on-primary cursor-pointer shadow-xs'
                       : 'bg-surface-container-highest text-outline cursor-not-allowed'
                   }`}
                 >
                   <span className="material-symbols-outlined text-[18px]">
-                    {isPortalActivated ? 'content_copy' : 'lock'}
+                    {isPortalReady ? 'content_copy' : 'lock'}
                   </span>
                   <span>Salin Tautan</span>
                 </button>
@@ -971,7 +1011,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               {/* Info Notice Box */}
               <div
                 className={`flex items-start gap-3 p-3.5 rounded-DEFAULT transition-colors ${
-                  isPortalActivated
+                  isPortalReady
                     ? 'bg-secondary-container/60 text-on-secondary-container'
                     : 'bg-tertiary-fixed/30 text-on-tertiary-fixed'
                 }`}
@@ -979,21 +1019,21 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               >
                 <span
                   className={`material-symbols-outlined text-[20px] mt-0.5 ${
-                    isPortalActivated ? 'text-primary' : 'text-tertiary'
+                    isPortalReady ? 'text-primary' : 'text-tertiary'
                   }`}
                 >
-                  {isPortalActivated ? 'verified_user' : 'info'}
+                  {isPortalReady ? 'verified_user' : 'info'}
                 </span>
                 <div className="flex flex-col gap-0.5">
                   <span
                     className={`font-label-sm text-label-sm uppercase tracking-wider font-bold ${
-                      isPortalActivated ? 'text-primary' : 'text-tertiary'
+                      isPortalReady ? 'text-primary' : 'text-tertiary'
                     }`}
                   >
-                    {isPortalActivated ? 'Tautan Siap Dibagikan' : 'Verifikasi Skema Diperlukan'}
+                    {isPortalReady ? 'Tautan Siap Dibagikan' : 'Verifikasi Skema Diperlukan'}
                   </span>
                   <p className="font-body-sm text-body-sm text-on-surface-variant leading-relaxed">
-                    {isPortalActivated ? (
+                    {isPortalReady ? (
                       <>
                         Struktur organisasi telah terverifikasi oleh <strong>Enclave Vault</strong>. URL gerbang
                         pendaftaran siap didistribusikan kepada calon staf.
@@ -1497,7 +1537,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   onClick={handleSavePortal}
                   disabled={isSaving}
                   className={`px-6 py-3 rounded-DEFAULT font-label-lg text-label-lg shadow-md inline-flex items-center gap-2 transition-all cursor-pointer ${
-                    isPortalActivated
+                    isPortalReady
                       ? 'bg-primary hover:bg-primary-container text-on-primary'
                       : 'bg-primary hover:bg-primary-container text-on-primary'
                   }`}
@@ -1508,7 +1548,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   <span>
                     {isSaving
                       ? 'Menyimpan...'
-                      : isPortalActivated
+                      : isPortalReady
                       ? 'Link Portal Aktif!'
                       : 'Simpan & Aktifkan Link Portal'}
                   </span>

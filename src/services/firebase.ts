@@ -37,7 +37,7 @@ const app = isFirebaseConfigured
 export const firebaseAuth = app ? getAuth(app) : null;
 export const firestore = app ? getFirestore(app) : null;
 
-export async function registerAdminWithFirebase(
+export async function registerAccountWithFirebase(
   account: Omit<RegisteredAccount, 'password'>,
   password: string
 ): Promise<void> {
@@ -47,14 +47,16 @@ export async function registerAdminWithFirebase(
     ...account,
     email: account.email!.toLowerCase(),
     username: account.username.toLowerCase(),
-    role: 'admin',
+    role: account.role,
   });
 }
+
+export const registerAdminWithFirebase = registerAccountWithFirebase;
 
 async function resolveEmail(credential: string): Promise<string> {
   if (!firestore) throw new Error('Firebase belum dikonfigurasi.');
   if (credential.includes('@')) return credential;
-  const usersQuery = query(collection(firestore, 'users'), where('username', '==', credential), where('role', '==', 'admin'));
+  const usersQuery = query(collection(firestore, 'users'), where('username', '==', credential));
   const snapshot = await getDocs(usersQuery);
   if (snapshot.empty) throw new Error('Akun tidak ditemukan.');
   return snapshot.docs[0].data().email as string;
@@ -67,6 +69,7 @@ export async function loginWithFirebase(credential: string, password: string): P
   const profileSnapshot = await getDoc(doc(firestore, 'users', result.user.uid));
   const profile = profileSnapshot.exists() ? profileSnapshot.data() : {};
   return {
+    uid: result.user.uid,
     name: (profile.name as string) || result.user.displayName || email,
     username: (profile.username as string) || email,
     email,

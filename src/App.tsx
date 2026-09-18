@@ -15,6 +15,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<AuthView>('login');
   const [prefilledUsername, setPrefilledUsername] = useState('');
   const [currentUser, setCurrentUser] = useState<{
+    uid?: string;
     username: string;
     name?: string;
     role: 'admin' | 'user';
@@ -29,6 +30,7 @@ export default function App() {
   const handleRegisterSuccess = (account: RegisteredAccount) => {
     setPrefilledUsername(account.username);
     setCurrentUser({
+      uid: account.uid,
       username: account.username,
       name: account.name,
       role: account.role,
@@ -37,6 +39,7 @@ export default function App() {
   };
 
   const handleLoginSuccess = (user: {
+    uid?: string;
     username: string;
     name?: string;
     role: 'admin' | 'user';
