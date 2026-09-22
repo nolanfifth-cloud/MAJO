@@ -588,9 +588,10 @@ const pmCompletedData: CompletedPMItem[] = []; /*
 
 interface RiwayatSelesaiViewProps {
   onTriggerToast: (message: string, isSuccess?: boolean) => void;
+  userUid?: string;
 }
 
-export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTriggerToast }) => {
+export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTriggerToast, userUid }) => {
   // State for search and filter
   const [searchQuery, setSearchQuery] = useState('');
   const [filterYear, setFilterYear] = useState<string>('all');
@@ -600,7 +601,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
 
   useEffect(() => {
     let cancelled = false;
-    loadCompletedReportsFromFirestore().then((reports) => {
+    loadCompletedReportsFromFirestore(userUid).then((reports) => {
       if (!cancelled) setCloudReports(reports as unknown as CompletedPMItem[]);
     }).catch(() => {
       // Local reports remain available when Firestore is unavailable.
@@ -608,7 +609,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userUid]);
 
   // State for expanded PM cards
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({

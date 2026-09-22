@@ -5,8 +5,9 @@ import {
   orderBy,
   query,
   setDoc,
+  where,
 } from 'firebase/firestore';
-import { PmItem, RegionConfig } from '../types';
+import { PmItem, RegisteredAccount, RegionConfig } from '../types';
 import { firestore, isFirebaseConfigured } from './firebase';
 import { PortalMasterConfig } from './workflowStore';
 
@@ -33,6 +34,48 @@ export async function loadAdminJobsFromFirestore(): Promise<PmItem[]> {
   return snapshot.docs.map((item) => item.data() as PmItem);
 }
 
+export async function loadJobsForLocationFromFirestore(location: string): Promise<PmItem[]> {
+  if (!isFirebaseConfigured || !firestore || !location) return [];
+  const snapshot = await getDocs(
+    query(collection(firestore, 'jobs'), where('targetWilayahList', 'array-contains', location))
+  );
+  return snapshot.docs.map((item) => item.data() as PmItem);
+}
+
+export async function saveJobProgressToFirestore(
+  jobId: string,
+  userUid: string,
+  location: string,
+  devices: unknown[],
+  summary?: { progress: number; doneCount: number; totalCount: number }
+): Promise<void> {
+  if (!isFirebaseConfigured || !firestore) return;
+  const progressId = `${jobId}_${userUid}`;
+  await setDoc(doc(firestore, 'jobProgress', progressId), {
+    jobId,
+    userUid,
+    location,
+    devices,
+    ...(summary || {}),
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+}
+
+export async function loadJobProgressFromFirestore(): Promise<Record<string, unknown>[]> {
+  if (!isFirebaseConfigured || !firestore) return [];
+  const snapshot = await getDocs(collection(firestore, 'jobProgress'));
+  return snapshot.docs.map((item) => item.data());
+}
+
+export async function loadRegisteredAccountsFromFirestore(): Promise<RegisteredAccount[]> {
+  if (!isFirebaseConfigured || !firestore) return [];
+  const snapshot = await getDocs(collection(firestore, 'users'));
+  return snapshot.docs.map((item) => ({
+    uid: item.id,
+    ...(item.data() as RegisteredAccount),
+  }));
+}
+
 export async function saveAdminJobToFirestore(job: PmItem, adminUid?: string): Promise<void> {
   if (!isFirebaseConfigured || !firestore) return;
   await setDoc(doc(firestore, 'jobs', job.id), {
@@ -52,9 +95,12 @@ export async function saveCompletedReportToFirestore(report: Record<string, unkn
   });
 }
 
-export async function loadCompletedReportsFromFirestore(): Promise<Record<string, unknown>[]> {
+export async function loadCompletedReportsFromFirestore(userUid?: string): Promise<Record<string, unknown>[]> {
   if (!isFirebaseConfigured || !firestore) return [];
-  const snapshot = await getDocs(query(collection(firestore, 'completedReports'), orderBy('savedAt', 'desc')));
+  const reportsQuery = userUid
+    ? query(collection(firestore, 'completedReports'), where('submittedBy', '==', userUid), orderBy('savedAt', 'desc'))
+    : query(collection(firestore, 'completedReports'), orderBy('savedAt', 'desc'));
+  const snapshot = await getDocs(reportsQuery);
   return snapshot.docs.map((item) => item.data());
 }
 

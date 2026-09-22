@@ -79,11 +79,8 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
       return;
     }
 
-    // Success simulation
-    setOldPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    triggerToast('Password Diperbarui', 'Kata sandi akun Anda berhasil diganti.', true);
+    setPasswordError('Perubahan kata sandi belum terhubung ke Firebase Authentication.');
+    triggerToast('Belum tersedia', 'Kata sandi belum diubah karena integrasi Firebase belum dijalankan.', false);
   };
 
   // Handle Double Verification Local Storage Cleanup
@@ -722,9 +719,11 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
                     Sesi Login Aktif
                   </h4>
-                  <p className="text-base font-bold text-slate-800 mt-1">Desktop Browser • Google Chrome</p>
+                  <p className="text-base font-bold text-slate-800 mt-1">
+                    Sesi Browser • {navigator.userAgent.includes('Edg') ? 'Microsoft Edge' : navigator.userAgent.includes('Chrome') ? 'Google Chrome' : navigator.userAgent.includes('Firefox') ? 'Mozilla Firefox' : 'Browser lain'}
+                  </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Sesi Desktop Aktif • Google Chrome (Sesi ini)
+                    Sesi aktif pada perangkat ini
                   </p>
                 </div>
                 <span className="w-3.5 h-3.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100"></span>

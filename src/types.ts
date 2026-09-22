@@ -10,6 +10,7 @@ export interface RegisteredAccount {
   password?: string;
   role: UserRole;
   portalAddress: string;
+  portalId?: string;
   location?: string;
   createdAt: string;
 }
@@ -38,6 +39,8 @@ export interface RecentLog {
 export interface PmModule {
   name: string;
   itemCount: number;
+  pmType?: string;
+  checklist?: ChecklistItem[];
 }
 
 export interface PmItem {
@@ -58,11 +61,19 @@ export interface PmItem {
   regionsDetail: RegionDetail[];
   recentLog: RecentLog;
   modules?: PmModule[];
+  portalId?: string;
+  dateType?: 'single' | 'range';
+  singleDate?: string;
+  areaType?: 'wilayah' | 'grup' | 'all';
+  targetArea?: string;
+  targetWilayahList?: string[];
+  targetGroupIds?: string[];
 }
 
 export interface ChecklistItem {
   id: string;
   text: string;
+  pmType?: string;
   hasPhoto: boolean;
   conditionText: string;
   hasTimestamp: boolean;

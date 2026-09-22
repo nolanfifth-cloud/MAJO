@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { AuthView, UserRole, RegisteredAccount } from '../types';
 import {
   getPortalConfig,
@@ -6,6 +6,7 @@ import {
   validatePortalAddress,
 } from '../services/workflowStore';
 import { isFirebaseConfigured, registerAccountWithFirebase } from '../services/firebase';
+import { loadPortalConfigFromFirestore, savePortalConfigToFirestore } from '../services/firestoreStore';
 
 const LOGO_URL = '/assets/logo%20MAJO.png';
 
@@ -18,7 +19,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   onNavigate,
   onRegisterSuccess,
 }) => {
-  const portalConfig = useMemo(() => getPortalConfig(), []);
+  const [portalConfig, setPortalConfig] = useState(() => getPortalConfig());
   const [role, setRole] = useState<UserRole>('admin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -36,6 +37,38 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successAccount, setSuccessAccount] = useState<RegisteredAccount | null>(null);
+
+  const availableLocations = useMemo(() => {
+    const locations = [
+      ...portalConfig.masterWilayah,
+      ...portalConfig.masterGroups.flatMap((group) => group.locations),
+    ];
+    return Array.from(new Set(locations.filter(Boolean)));
+  }, [portalConfig]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadPortalConfigFromFirestore()
+      .then((cloudConfig) => {
+        if (!cloudConfig || cancelled) return;
+        setPortalConfig(cloudConfig);
+        savePortalConfig(cloudConfig);
+      })
+      .catch(() => {
+        // The local portal configuration remains available offline.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (availableLocations.length > 0 && !availableLocations.includes(selectedLocation)) {
+      setSelectedLocation(availableLocations[0]);
+    }
+  }, [availableLocations, selectedLocation]);
 
   // Validation state for user portal link
   const isPortalValid = useMemo(() => {
@@ -107,6 +140,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
     setIsLoading(true);
 
     try {
+      let updatedPortalConfig = portalConfig;
       // If admin, update portal config with the newly created portal address and permanent link
       if (role === 'admin') {
         const cleanSlug = portalAddress
@@ -117,13 +151,13 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
           .replace(/-+/g, '-')
           .replace(/^-|-$/g, '');
         const portalDomain = `${cleanSlug}.majo.id`;
-        const updatedConfig = {
+        updatedPortalConfig = {
           ...portalConfig,
           portalAddress: portalDomain,
           portalLink: portalDomain,
           isActivated: true,
         };
-        savePortalConfig(updatedConfig);
+        savePortalConfig(updatedPortalConfig);
       }
 
       const newAccount: RegisteredAccount = {
@@ -142,6 +176,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
 
       if (isFirebaseConfigured) {
         await registerAccountWithFirebase(newAccount, password);
+        if (role === 'admin') {
+          await savePortalConfigToFirestore(updatedPortalConfig);
+        }
       } else {
         const stored = localStorage.getItem('majo_accounts');
         const accounts = stored ? JSON.parse(stored) : [];
@@ -511,7 +548,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                       onChange={(e) => setSelectedLocation(e.target.value)}
                       className="w-full pl-11 pr-10 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-full text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all shadow-2xs appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {portalConfig.masterWilayah.map((loc) => (
+                      {availableLocations.map((loc) => (
                         <option key={loc} value={loc}>
                           {loc}
                         </option>

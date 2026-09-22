@@ -5,18 +5,94 @@ import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
 import { downloadPmReportExcel } from '../services/excelExport';
 import { getPortalConfig } from '../services/workflowStore';
-import { loadAdminJobsFromFirestore, saveAdminJobToFirestore } from '../services/firestoreStore';
+import {
+  loadAdminJobsFromFirestore,
+  loadCompletedReportsFromFirestore,
+  loadJobProgressFromFirestore,
+  loadPortalConfigFromFirestore,
+  loadRegisteredAccountsFromFirestore,
+  saveAdminJobToFirestore,
+} from '../services/firestoreStore';
 
 interface AdminDashboardProps {
   onNavigate: (view: AuthView) => void;
+  onLogout?: () => void;
   currentUser?: {
     username: string;
     name?: string;
     role?: string;
+    location?: string;
   };
 }
 
 const INITIAL_PMS: PmItem[] = [];
+
+const getRemainingDaysLabel = (endDate: string) => {
+  if (!endDate) return 'Tanggal berakhir belum ditentukan';
+  const remainingDays = Math.ceil((new Date(`${endDate}T23:59:59`).getTime() - Date.now()) / 86400000);
+  if (remainingDays < 0) return `Berakhir ${Math.abs(remainingDays)} hari lalu`;
+  if (remainingDays === 0) return 'Berakhir hari ini';
+  return `Sisa ${remainingDays} hari kalender`;
+};
+
+const deduplicateJobs = (jobs: PmItem[]): PmItem[] => {
+  const uniqueJobs = new Map<string, PmItem>();
+  jobs.forEach((job) => {
+    const key = job.code || job.id;
+    if (key && !uniqueJobs.has(key)) uniqueJobs.set(key, job);
+  });
+  return Array.from(uniqueJobs.values());
+};
+
+const applyCompletedReports = (jobs: PmItem[], reports: Record<string, unknown>[]): PmItem[] => {
+  const completedByTitle = new Map(
+    reports
+      .map((report) => [String(report.title || ''), report] as const)
+      .filter(([title]) => Boolean(title))
+  );
+
+  return jobs.map((job) => {
+    const report = completedByTitle.get(job.title);
+    if (!report) return job;
+    const technicianName = String(report.technicianName || job.pic || '');
+    return {
+      ...job,
+      progress: 100,
+      doneCount: job.totalCount,
+      pendingCount: 0,
+      recentLog: {
+        ...job.recentLog,
+        name: technicianName,
+        avatar: technicianName
+          .split(' ')
+          .map((part) => part[0])
+          .join('')
+          .slice(0, 2)
+          .toUpperCase(),
+        activity: 'Laporan PM telah diselesaikan oleh teknisi.',
+        time: String(report.completedAt || 'Baru saja'),
+      },
+    };
+  });
+};
+
+const applyJobProgress = (jobs: PmItem[], snapshots: Record<string, unknown>[]): PmItem[] => {
+  const progressByJob = new Map(snapshots.map((snapshot) => [String(snapshot.jobId || ''), snapshot]));
+  return jobs.map((job) => {
+    const snapshot = progressByJob.get(job.id);
+    if (!snapshot) return job;
+    const progress = Number(snapshot.progress || 0);
+    const doneCount = Number(snapshot.doneCount || 0);
+    const totalCount = Number(snapshot.totalCount || job.totalCount);
+    return {
+      ...job,
+      progress,
+      doneCount,
+      totalCount,
+      pendingCount: Math.max(0, totalCount - doneCount),
+    };
+  });
+};
 /*
   {
     id: 'pm-row-1',
@@ -87,10 +163,13 @@ const INITIAL_PMS: PmItem[] = [];
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onNavigate,
-  currentUser = { username: '', name: '', role: 'admin' },
+  onLogout,
+  currentUser = { username: '', name: '', role: 'admin', location: '' },
 }) => {
   // Primary list state
   const [pmList, setPmList] = useState<PmItem[]>(INITIAL_PMS);
+  const [connectedTechnicians, setConnectedTechnicians] = useState(0);
+  const [configuredRegions, setConfiguredRegions] = useState<string[]>([]);
   const [selectedPmId, setSelectedPmId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRegionFilter, setSelectedRegionFilter] = useState('Semua Region');
@@ -146,34 +225,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (savedReports) {
         const parsedReports = JSON.parse(savedReports);
         if (Array.isArray(parsedReports) && parsedReports.length > 0) {
-          const latestReport = parsedReports[0];
-          baseList = baseList.map((pm) => {
-            if (pm.id === 'pm-row-1' || pm.code === latestReport.id || pm.title.includes('PM September 2026')) {
-              return {
-                ...pm,
-                progress: 100,
-                doneCount: pm.totalCount,
-                pendingCount: 0,
-                recentLog: {
-                  name: latestReport.technicianName || 'Agus Setiawan, S.T.',
-                  avatar: (latestReport.technicianName || 'Agus Setiawan')
-                    .split(' ')
-                    .map((n: string) => n[0])
-                    .join('')
-                    .substring(0, 2)
-                    .toUpperCase(),
-                  activity: `Laporan 100% lengkap diserahkan oleh teknisi (${latestReport.pointsCount || 8} titik diverifikasi).`,
-                  time: latestReport.completedAt || 'Baru saja',
-                },
-              };
-            }
-            return pm;
-          });
+          baseList = applyCompletedReports(baseList, parsedReports);
         }
       }
 
-      setPmList(baseList);
-      if (!baseList.length) setSelectedPmId('');
+      const uniqueJobs = deduplicateJobs(baseList);
+      setPmList(uniqueJobs);
+      if (!uniqueJobs.length) setSelectedPmId('');
     } catch {
       // Ignore parse errors
     }
@@ -181,10 +239,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     let cancelled = false;
-    loadAdminJobsFromFirestore().then((cloudJobs) => {
+    Promise.all([
+      loadAdminJobsFromFirestore(),
+      loadCompletedReportsFromFirestore(),
+      loadJobProgressFromFirestore(),
+      loadRegisteredAccountsFromFirestore(),
+      loadPortalConfigFromFirestore(),
+    ]).then(([cloudJobs, cloudReports, progressSnapshots, accounts, cloudPortalConfig]) => {
       if (!cancelled && cloudJobs.length > 0) {
-        setPmList(cloudJobs);
-        setSelectedPmId(cloudJobs[0].id);
+        let uniqueCloudJobs = deduplicateJobs(cloudJobs);
+        const localReports = (() => {
+          try {
+            const raw = localStorage.getItem('majo_completed_reports');
+            return raw ? (JSON.parse(raw) as Record<string, unknown>[]) : [];
+          } catch {
+            return [];
+          }
+        })();
+        uniqueCloudJobs = applyCompletedReports(uniqueCloudJobs, [...cloudReports, ...localReports]);
+        uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots);
+        setPmList(uniqueCloudJobs);
+        setSelectedPmId(uniqueCloudJobs[0]?.id || '');
+      }
+      if (!cancelled) {
+        setConnectedTechnicians(accounts.filter((account) => account.role === 'user').length);
+        const portalConfig = cloudPortalConfig || getPortalConfig();
+        setConfiguredRegions((portalConfig.masterGroups || []).map((group) => group.name));
       }
     }).catch(() => {
       // Local jobs remain available when Firestore is unavailable.
@@ -193,6 +273,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       cancelled = true;
     };
   }, []);
+
+  const completedJobsCount = useMemo(
+    () => pmList.filter((pm) => pm.progress >= 100).length,
+    [pmList]
+  );
+  const inProgressJobsCount = pmList.filter((pm) => pm.progress < 100).length;
+  const averageCompletion = useMemo(() => {
+    if (pmList.length === 0) return 0;
+    return Math.round(pmList.reduce((total, pm) => total + Math.max(0, Math.min(100, pm.progress)), 0) / pmList.length);
+  }, [pmList]);
 
   // Active navigation tab in sidebar
   const [activeNav, setActiveNav] = useState<'dashboard' | 'create-jobs' | 'link-portal' | 'pengaturan-profile'>('dashboard');
@@ -273,9 +363,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (isNew || !pm) {
       setModalTargetPm(null);
       setEditTitle('');
-      setEditStart('2026-10-01');
-      setEditEnd('2026-10-28');
-      setEditRegions('Medan, Jakarta, Surabaya');
+      const today = new Date();
+      const endDate = new Date(today);
+      endDate.setDate(today.getDate() + 28);
+      const formatDate = (date: Date) => date.toISOString().slice(0, 10);
+      const portalConfig = getPortalConfig();
+      const regionNames = portalConfig.masterGroups.map((group) => group.name);
+      setEditStart(formatDate(today));
+      setEditEnd(formatDate(endDate));
+      setEditRegions(regionNames.join(', '));
       setEditPic('');
       setEditModules([
         { name: 'Pemeriksaan Gardu & Transformator Induk', itemCount: 12 },
@@ -540,19 +636,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setShowNotificationMenu(!showNotificationMenu)}
               >
                 <span className="material-symbols-outlined text-[22px]">notifications</span>
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-error rounded-full ring-2 ring-surface-container-lowest"></span>
               </button>
 
               {showNotificationMenu && (
                 <div className="absolute right-0 mt-2 w-72 bg-surface-container-lowest rounded-xl shadow-xl border border-outline-variant/30 p-3 z-50 animate-in fade-in">
                   <div className="flex items-center justify-between pb-2 border-b border-outline-variant/20">
                     <span className="text-xs font-bold text-on-surface">Pemberitahuan Sistem</span>
-                    <span className="text-[10px] text-primary font-semibold">Tandai Dibaca</span>
+                    <span className="text-[10px] text-secondary font-semibold">Status</span>
                   </div>
                   <div className="py-2 space-y-2">
                     <div className="p-2 rounded-lg bg-surface-container-low text-xs">
-                      <p className="font-semibold text-on-surface">Inspeksi Selesai 100%</p>
-                      <p className="text-secondary text-[11px]">Tidak ada notifikasi baru.</p>
+                      <p className="font-semibold text-on-surface">{pmList.length} pekerjaan terdaftar</p>
+                      <p className="text-secondary text-[11px]">{completedJobsCount} selesai, {inProgressJobsCount} berjalan.</p>
                     </div>
                   </div>
                 </div>
@@ -570,7 +665,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span className="font-label-md text-label-md text-on-surface leading-tight font-semibold">
                     {currentUser.name || 'Belum login'}
                   </span>
-                  <span className="font-body-sm text-body-sm text-secondary">Region Central</span>
+                  <span className="font-body-sm text-body-sm text-secondary">{currentUser.location || 'Lokasi admin'}</span>
                 </div>
                 <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-on-primary font-semibold text-label-sm shadow-xs">
                   <span className="material-symbols-outlined text-[18px]">person</span>
@@ -599,7 +694,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onNavigate('login')}
+                    onClick={() => onLogout?.()}
                     className="w-full text-left px-3 py-2 text-xs text-error hover:bg-error-container/20 rounded-lg flex items-center gap-2 cursor-pointer border-t border-outline-variant/20 mt-1"
                   >
                     <span className="material-symbols-outlined text-[16px]">logout</span>
@@ -659,7 +754,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onNavigateToDashboard={() => setActiveNav('dashboard')}
               onNavigateToCreateJobs={() => setActiveNav('create-jobs')}
               onNavigateToLinkPortal={() => setActiveNav('link-portal')}
-              onLogout={() => onNavigate('login')}
+              onLogout={() => onLogout?.()}
               currentUser={{
                 username: currentUser?.username || '',
                 name: currentUser?.name || '',
@@ -759,7 +854,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {pmList.length > 0 ? pmList.length : 0}
                   </span>
                   <span className="font-body-sm text-body-sm text-primary font-semibold">
-                    {pmList.length > 0 ? '1 Selesai • 1 Berjalan' : 'tugas terdaftar'}
+                    {completedJobsCount} Selesai • {inProgressJobsCount} Berjalan
                   </span>
                 </div>
               </div>
@@ -776,7 +871,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <div className="mt-4 flex items-baseline gap-2">
                   <span className="font-headline-xl text-headline-xl text-on-surface font-extrabold">
-                    {pmList.length > 0 ? 14 : 0}
+                    {connectedTechnicians}
                   </span>
                   <span className="font-body-sm text-body-sm text-outline">staf aktif lapangan</span>
                 </div>
@@ -794,10 +889,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <div className="mt-4 flex items-baseline gap-2">
                   <span className="font-headline-xl text-headline-xl text-on-surface font-extrabold">
-                    {pmList.length > 0 ? 3 : '--'}
+                    {configuredRegions.length}
                   </span>
                   <span className="font-body-sm text-body-sm text-outline">
-                    {pmList.length > 0 ? 'Medan, Jkt, Sby' : 'belum dikonfigurasi'}
+                    {configuredRegions.length > 0 ? configuredRegions.join(', ') : 'belum dikonfigurasi'}
                   </span>
                 </div>
               </div>
@@ -813,8 +908,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </span>
                 </div>
                 <div className="mt-4 flex items-baseline gap-2">
-                  <span className="font-headline-xl text-headline-xl text-on-surface font-extrabold">100%</span>
-                  <span className="font-body-sm text-body-sm text-outline">standar node siap</span>
+                  <span className="font-headline-xl text-headline-xl text-on-surface font-extrabold">{averageCompletion}%</span>
+                  <span className="font-body-sm text-body-sm text-outline">rata-rata progres PM</span>
                 </div>
               </div>
             </div>
@@ -878,7 +973,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </h2>
                         <span className="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary font-label-sm text-label-sm flex items-center gap-1.5 font-semibold">
                           <span className="w-1.5 h-1.5 rounded-full bg-primary animate-ping"></span>
-                          1 Berjalan • 1 Selesai
+                          {inProgressJobsCount} Berjalan • {completedJobsCount} Selesai
                         </span>
                       </div>
                       <p className="font-body-sm text-body-sm text-secondary mt-0.5">
@@ -898,9 +993,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         className="flex items-center gap-2 px-3 py-1.5 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 text-secondary text-body-sm outline-none cursor-pointer"
                       >
                         <option value="Semua Region">Semua Region</option>
-                        <option value="Medan">Medan</option>
-                        <option value="Jakarta">Jakarta</option>
-                        <option value="Surabaya">Surabaya</option>
+                        {configuredRegions.map((region) => (
+                          <option key={region} value={region}>{region}</option>
+                        ))}
                       </select>
                     </div>
 
@@ -969,7 +1064,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <p className="font-body-sm text-body-sm text-secondary flex items-center gap-2">
                                     <span className="flex items-center gap-1">
                                       <span className="material-symbols-outlined text-[14px]">pin_drop</span>
-                                      {pm.subStationCount || 12} Lokasi Sub-Stasiun
+                                      {pm.subStationCount || 0} Lokasi Sub-Stasiun
                                     </span>
                                     <span>•</span>
                                     <span className="flex items-center gap-1">
@@ -991,7 +1086,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   {pm.dates}
                                 </span>
                                 <span className="font-body-sm text-body-sm text-secondary mt-0.5">
-                                  {pm.progress === 100 ? 'Sisa 14 Hari Kalender' : 'Sisa 6 Hari Kalender'}
+                                  {getRemainingDaysLabel(pm.endDate)}
                                 </span>
                               </div>
                             </td>
@@ -1239,7 +1334,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             Progres per Lokasi
                           </span>
                           <span className="text-outline text-body-sm font-medium">
-                            {currentSelectedPm.regionsDetail?.length || 3} Wilayah
+                            {currentSelectedPm.regionsDetail?.length || 0} Wilayah
                           </span>
                         </div>
                         <div className="space-y-2 text-body-sm">
@@ -1358,7 +1453,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         1
                       </span>
                       <span className="font-body-sm text-body-sm text-primary font-semibold">
-                        {pmList.length > 0 ? '1 Selesai • 1 Berjalan' : 'Siap diatur'}
+                        {pmList.length > 0 ? `${completedJobsCount} Selesai • ${inProgressJobsCount} Berjalan` : 'Siap diatur'}
                       </span>
                     </div>
                     <div className="flex flex-col gap-1">
@@ -1533,13 +1628,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Semua Wilayah
                   </span>
                   <span className="px-3 py-1 rounded-full bg-surface-container text-secondary font-label-sm text-label-sm">
-                    Medan
+                    {modalTargetPm.regions || 'Belum ditentukan'}
                   </span>
                   <span className="px-3 py-1 rounded-full bg-surface-container text-secondary font-label-sm text-label-sm">
-                    Jakarta
+                    {modalTargetPm.pic || 'PIC belum ditentukan'}
                   </span>
                   <span className="px-3 py-1 rounded-full bg-surface-container text-secondary font-label-sm text-label-sm">
-                    Surabaya
+                    {modalTargetPm.progress}% selesai
                   </span>
                 </div>
                 <span className="text-body-sm text-secondary font-medium">
@@ -1557,30 +1652,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="font-label-md text-label-md text-on-surface font-bold">
-                          1. Kalibrasi Suhu Transformator & Pengecekan Oli Isolasi
+                          {modalTargetPm.modules?.[0]?.name || 'Belum ada checklist'}
                         </h4>
                         <span className="px-2 py-0.5 rounded bg-primary/15 text-primary text-[11px] font-bold uppercase">
-                          Selesai
+                          {modalTargetPm.progress >= 100 ? 'Selesai' : 'Berjalan'}
                         </span>
                       </div>
                       <p className="font-body-sm text-body-sm text-secondary mt-1">
-                        Wilayah: <strong>Belum ada data wilayah</strong> • PIC Pelaksana: <strong>Belum ditentukan</strong>
+                        Wilayah: <strong>{modalTargetPm.regions || 'Belum ditentukan'}</strong> • PIC Pelaksana: <strong>{modalTargetPm.pic || 'Belum ditentukan'}</strong>
                       </p>
                       <div className="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant font-medium">
                         <span className="flex items-center gap-1 text-primary">
-                          <span className="material-symbols-outlined text-[16px]">photo_camera</span> 3 Foto Bukti Terunggah
+                          <span className="material-symbols-outlined text-[16px]">checklist</span> {modalTargetPm.modules?.[0]?.itemCount || 0} Item Checklist
                         </span>
                         <span>•</span>
-                        <span>Nilai: 41.2°C (Normal)</span>
+                        <span>Progres: {modalTargetPm.progress}%</span>
                         <span>•</span>
-                        <span className="text-secondary">Diselesaikan: Hari ini, 09:30 WIB</span>
+                        <span className="text-secondary">{modalTargetPm.recentLog?.time || 'Belum ada aktivitas'}</span>
                       </div>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() =>
-                      triggerBottomToast('Pratinjau Foto Bukti', 'Foto meter oli dan termometer inframerah terlampir lengkap.')
+                      triggerBottomToast('Data Checklist', 'Rincian foto hanya tersedia jika dikirim dalam laporan teknisi.')
                     }
                     className="px-3 py-1.5 rounded-DEFAULT bg-surface-container text-on-surface hover:bg-surface-container-high text-label-sm font-semibold flex items-center gap-1 self-start md:self-auto transition-colors cursor-pointer"
                   >
@@ -1597,30 +1692,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="font-label-md text-label-md text-on-surface font-bold">
-                          2. Pemeriksaan Kontak Sakelar Pemutus Daya (Circuit Breaker)
+                          {modalTargetPm.modules?.[1]?.name || 'Checklist tambahan belum tersedia'}
                         </h4>
                         <span className="px-2 py-0.5 rounded bg-primary/15 text-primary text-[11px] font-bold uppercase">
-                          Selesai
+                          {modalTargetPm.progress >= 100 ? 'Selesai' : 'Berjalan'}
                         </span>
                       </div>
                       <p className="font-body-sm text-body-sm text-secondary mt-1">
-                        Wilayah: <strong>Belum ada data wilayah</strong> • PIC Pelaksana: <strong>Belum ditentukan</strong>
+                        Wilayah: <strong>{modalTargetPm.regions || 'Belum ditentukan'}</strong> • PIC Pelaksana: <strong>{modalTargetPm.pic || 'Belum ditentukan'}</strong>
                       </p>
                       <div className="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant font-medium">
                         <span className="flex items-center gap-1 text-primary">
-                          <span className="material-symbols-outlined text-[16px]">photo_camera</span> 2 Foto Bukti Terunggah
+                          <span className="material-symbols-outlined text-[16px]">checklist</span> {modalTargetPm.modules?.[1]?.itemCount || 0} Item Checklist
                         </span>
                         <span>•</span>
-                        <span>Status: Baik / Layak Operasi</span>
+                        <span>Progres: {modalTargetPm.progress}%</span>
                         <span>•</span>
-                        <span className="text-secondary">Diselesaikan: Kemarin, 16:15 WIB</span>
+                        <span className="text-secondary">{modalTargetPm.recentLog?.time || 'Belum ada aktivitas'}</span>
                       </div>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() =>
-                      triggerBottomToast('Pratinjau Foto Bukti', 'Kondisi kontak breaker bersih tanpa kerak korosi.')
+                      triggerBottomToast('Data Checklist', 'Rincian foto hanya tersedia jika dikirim dalam laporan teknisi.')
                     }
                     className="px-3 py-1.5 rounded-DEFAULT bg-surface-container text-on-surface hover:bg-surface-container-high text-label-sm font-semibold flex items-center gap-1 self-start md:self-auto transition-colors cursor-pointer"
                   >
@@ -2071,13 +2166,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     readOnly
                     type="text"
-                    value="https://majo-portal.internal/register?ref=region-central"
+                    value={`${getPortalConfig().portalLink}/register`}
                     className="flex-1 px-3 py-2 text-xs bg-surface-container-lowest rounded border border-outline-variant/30 text-on-surface font-mono"
                   />
                   <button
                     type="button"
                     onClick={() => {
-                      navigator.clipboard?.writeText('https://majo-portal.internal/register?ref=region-central');
+                      navigator.clipboard?.writeText(`${getPortalConfig().portalLink}/register`);
                       triggerBottomToast('Tautan Disalin', 'Tautan registrasi telah disalin ke clipboard Anda.');
                     }}
                     className="px-3 py-2 bg-primary text-white rounded text-xs font-semibold hover:bg-primary-container cursor-pointer"
@@ -2086,25 +2181,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
                 <p className="text-[11px] text-secondary">
-                  Teknisi yang mendaftar melalui tautan ini akan langsung otomatis masuk ke hierarki Region Central Anda.
+                  Teknisi yang mendaftar melalui tautan ini akan masuk ke konfigurasi portal yang aktif.
                 </p>
               </div>
 
               <div className="space-y-2">
                 <span className="text-xs font-bold text-on-surface">Skema Wilayah Aktif</span>
-                <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="p-3 bg-surface-container-low rounded-lg border border-outline-variant/20">
-                    <p className="font-bold text-on-surface">Medan</p>
-                    <p className="text-[10px] text-secondary">4 Sub-Stasiun</p>
-                  </div>
-                  <div className="p-3 bg-surface-container-low rounded-lg border border-outline-variant/20">
-                    <p className="font-bold text-on-surface">Jakarta</p>
-                    <p className="text-[10px] text-secondary">5 Sub-Stasiun</p>
-                  </div>
-                  <div className="p-3 bg-surface-container-low rounded-lg border border-outline-variant/20">
-                    <p className="font-bold text-on-surface">Surabaya</p>
-                    <p className="text-[10px] text-secondary">3 Sub-Stasiun</p>
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center text-xs">
+                  {configuredRegions.map((region) => (
+                    <div key={region} className="p-3 bg-surface-container-low rounded-lg border border-outline-variant/20">
+                      <p className="font-bold text-on-surface">{region}</p>
+                      <p className="text-[10px] text-secondary">Wilayah terdaftar</p>
+                    </div>
+                  ))}
+                  {configuredRegions.length === 0 && <p className="col-span-full text-secondary">Belum ada wilayah aktif.</p>}
                 </div>
               </div>
             </div>
@@ -2184,7 +2274,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   setIsProfileModalOpen(false);
-                  onNavigate('login');
+                  onLogout?.();
                 }}
                 className="px-4 py-2 rounded-DEFAULT bg-error-container text-error text-xs font-semibold hover:bg-error hover:text-white transition-colors cursor-pointer flex items-center gap-1"
               >

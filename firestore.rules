@@ -11,6 +11,10 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    function userLocation() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.location;
+    }
+
     match /users/{userId} {
       allow create: if signedIn() && request.auth.uid == userId;
       allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
@@ -24,8 +28,22 @@ service cloud.firestore {
     }
 
     match /jobs/{jobId} {
-      allow read: if signedIn();
+      allow read: if isAdmin()
+        || (signedIn()
+          && 'targetWilayahList' in resource.data
+          && resource.data.targetWilayahList.hasAny([userLocation()]));
       allow create, update, delete: if isAdmin();
+    }
+
+    match /jobProgress/{progressId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.userUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.userUid == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.userUid == request.auth.uid
+        && request.resource.data.userUid == request.auth.uid;
+      allow delete: if isAdmin();
     }
 
     match /completedReports/{reportId} {

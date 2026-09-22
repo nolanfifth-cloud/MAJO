@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { RegionConfig, StaffResetRequest } from '../types';
 import { getPortalConfig, savePortalConfig } from '../services/workflowStore';
 import { hasRealPortalLocation, loadPortalConfigFromFirestore, savePortalConfigToFirestore } from '../services/firestoreStore';
@@ -18,20 +18,23 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   onNavigateToCreateJobs,
   onConfigurationCompleted,
 }) => {
+  const localPortalConfig = getPortalConfig();
+
   // State: Tab & Mode
   const [currentTab, setCurrentTab] = useState<'wilayah' | 'hanya-lokasi'>('wilayah');
 
   // State: Data
-  const [masterLocations, setMasterLocations] = useState<string[]>(INITIAL_MASTER_LOCATIONS);
-  const [regions, setRegions] = useState<RegionConfig[]>(INITIAL_REGIONS);
+  const [masterLocations, setMasterLocations] = useState<string[]>(localPortalConfig.masterWilayah || INITIAL_MASTER_LOCATIONS);
+  const [regions, setRegions] = useState<RegionConfig[]>(localPortalConfig.masterGroups || INITIAL_REGIONS);
   const [isPortalActivated, setIsPortalActivated] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('majo_portal_configured') === 'true';
+      return localStorage.getItem('majo_portal_configured') === 'true' || localPortalConfig.isActivated;
     } catch {
       return false;
     }
   });
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const firestoreSaveQueue = useRef(Promise.resolve());
 
   const hasConfiguredLocation = masterLocations.length > 0 || regions.some((region) => region.locations.length > 0);
   const isPortalReady = isPortalActivated && hasConfiguredLocation;
@@ -40,11 +43,20 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     let cancelled = false;
     loadPortalConfigFromFirestore().then((config) => {
       if (!config || cancelled) return;
-      setMasterLocations(config.masterWilayah || []);
-      setRegions(config.masterGroups || []);
-      setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
-    }).catch(() => {
-      // Local configuration remains available when the cloud is unreachable.
+      const hasCloudLocations = Boolean(
+        config.masterWilayah?.length || config.masterGroups?.some((group) => group.locations?.length)
+      );
+      if (hasCloudLocations || (!localPortalConfig.masterWilayah.length && !localPortalConfig.masterGroups.length)) {
+        setMasterLocations(config.masterWilayah || []);
+        setRegions(config.masterGroups || []);
+        setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
+        savePortalConfig(config);
+      }
+    }).catch((error) => {
+      if (!cancelled) {
+        const message = error instanceof Error ? error.message : 'Gagal memuat konfigurasi Firebase.';
+        showToast(`Data lokal ditampilkan. Gagal memuat Firebase: ${message}`, 'info');
+      }
     });
     return () => {
       cancelled = true;
@@ -125,6 +137,33 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     return regions.reduce((acc, r) => acc + (r.locations ? r.locations.length : 0), 0);
   }, [regions]);
 
+  const persistPortalConfigSnapshot = async (
+    nextLocations: string[],
+    nextRegions: RegionConfig[],
+    nextActivated = isPortalActivated
+  ) => {
+    const currentConfig = getPortalConfig();
+    const nextConfig: typeof currentConfig = {
+      ...currentConfig,
+      portalAddress: currentConfig.portalAddress || 'pt-majo-logistik-indo.majo.id',
+      portalLink: currentConfig.portalLink || 'pt-majo-logistik-indo.majo.id',
+      isActivated: nextActivated,
+      masterWilayah: nextLocations,
+      masterGroups: nextRegions,
+    };
+
+    savePortalConfig(nextConfig);
+    localStorage.setItem('majo_portal_configured', String(nextActivated));
+
+    firestoreSaveQueue.current = firestoreSaveQueue.current
+      .then(() => savePortalConfigToFirestore(nextConfig))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : 'Gagal menyimpan ke Firebase.';
+        showToast(`Tersimpan di perangkat, tetapi gagal ke Firebase: ${message}`, 'info');
+      });
+    await firestoreSaveQueue.current;
+  };
+
   // Filtered Flat Locations
   const filteredFlatLocations = useMemo(() => {
     if (!flatSearchQuery.trim()) return masterLocations;
@@ -165,22 +204,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       setIsSaving(false);
       setIsPortalActivated(true);
       try {
-        const currentConfig = getPortalConfig();
-        savePortalConfig({
-          ...currentConfig,
-          portalAddress: currentConfig.portalAddress,
-          portalLink: currentConfig.portalLink,
-          isActivated: true,
-          masterWilayah: masterLocations,
-          masterGroups: regions,
-        });
-        await savePortalConfigToFirestore({
-          ...currentConfig,
-          isActivated: true,
-          masterWilayah: masterLocations,
-          masterGroups: regions,
-        });
-        localStorage.setItem('majo_portal_configured', 'true');
+        await persistPortalConfigSnapshot(masterLocations, regions, true);
       } catch {
         // Ignore
       }
@@ -199,7 +223,9 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       showToast(`Lokasi "${val}" sudah ada di Master Data`, 'info');
       return;
     }
-    setMasterLocations((prev) => [val, ...prev]);
+    const nextLocations = [val, ...masterLocations];
+    setMasterLocations(nextLocations);
+    void persistPortalConfigSnapshot(nextLocations, regions, isPortalActivated);
     setNewFlatLocationInput('');
     setFlatCurrentPage(1);
     showToast(`Lokasi baru "${val}" ditambahkan ke Master Data`, 'success');
@@ -208,16 +234,14 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   // Add Region
   const handleAddRegionSubmit = () => {
     const rName = newRegionName.trim();
-    const bName = newRegionInitialBranch.trim();
+    const bName = newRegionInitialBranch;
 
     if (!rName) return;
 
     const locs: string[] = [];
-    if (bName) {
+    const nextLocations = [...masterLocations];
+    if (bName && masterLocations.includes(bName)) {
       locs.push(bName);
-      if (!masterLocations.includes(bName)) {
-        setMasterLocations((prev) => [bName, ...prev]);
-      }
     }
 
     const newRegion: RegionConfig = {
@@ -226,7 +250,10 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       locations: locs,
     };
 
-    setRegions((prev) => [...prev, newRegion]);
+    const nextRegions = [...regions, newRegion];
+    setMasterLocations(nextLocations);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
     setNewRegionName('');
     setNewRegionInitialBranch('');
     setIsAddRegionModalOpen(false);
@@ -244,27 +271,35 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   const handleChooseBranchForRegion = (branchName: string) => {
     if (!targetRegionForBranch) return;
-    setRegions((prev) =>
-      prev.map((r) => {
-        if (r.id === targetRegionForBranch) {
-          if (!r.locations.includes(branchName)) {
-            return { ...r, locations: [...r.locations, branchName] };
-          }
+    const nextRegions = regions.map((r) => {
+      if (r.id === targetRegionForBranch) {
+        if (!r.locations.includes(branchName)) {
+          return { ...r, locations: [...r.locations, branchName] };
         }
-        return r;
-      })
-    );
+      }
+      return r;
+    });
+    setRegions(nextRegions);
+    const nextLocations = masterLocations.includes(branchName) ? masterLocations : [branchName, ...masterLocations];
+    setMasterLocations(nextLocations);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
     showToast(`Lokasi "${branchName}" ditambahkan ke wilayah!`, 'success');
-    setIsAddBranchModalOpen(false);
   };
 
   const handleDirectMasterRegister = () => {
     const val = directMasterInput.trim();
     if (!val) return;
-    if (!masterLocations.includes(val)) {
-      setMasterLocations((prev) => [val, ...prev]);
-    }
-    handleChooseBranchForRegion(val);
+    const nextLocations = masterLocations.includes(val) ? masterLocations : [val, ...masterLocations];
+    const nextRegions = regions.map((r) => {
+      if (r.id === targetRegionForBranch && !r.locations.includes(val)) {
+        return { ...r, locations: [...r.locations, val] };
+      }
+      return r;
+    });
+    setMasterLocations(nextLocations);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
+    showToast(`Lokasi "${val}" ditambahkan ke wilayah!`, 'success');
     setDirectMasterInput('');
   };
 
@@ -318,9 +353,12 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const handleExecuteDoubleDelete = () => {
     if (!doubleDeleteConfig.confirmed) return;
 
+    let nextLocations = masterLocations;
+    let nextRegions = regions;
+
     if (doubleDeleteConfig.type === 'region' && doubleDeleteConfig.regionId) {
       const regId = doubleDeleteConfig.regionId;
-      setRegions((prev) => prev.filter((r) => r.id !== regId));
+      nextRegions = regions.filter((r) => r.id !== regId);
       showToast(`Data "${doubleDeleteConfig.displayName}" berhasil dihapus dari sistem`, 'success');
     } else if (
       doubleDeleteConfig.type === 'branch' &&
@@ -329,37 +367,38 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     ) {
       const regId = doubleDeleteConfig.regionId;
       const idx = doubleDeleteConfig.branchIndex;
-      setRegions((prev) =>
-        prev.map((r) => {
-          if (r.id === regId) {
-            const nextLocs = [...r.locations];
-            nextLocs.splice(idx, 1);
-            return { ...r, locations: nextLocs };
-          }
-          return r;
-        })
-      );
+      nextRegions = regions.map((r) => {
+        if (r.id === regId) {
+          const nextLocs = [...r.locations];
+          nextLocs.splice(idx, 1);
+          return { ...r, locations: nextLocs };
+        }
+        return r;
+      });
       showToast(`Titik lokasi "${doubleDeleteConfig.displayName}" berhasil dihapus`, 'success');
     } else if (doubleDeleteConfig.type === 'flatLocation' && doubleDeleteConfig.locName) {
       const targetName = doubleDeleteConfig.locName;
-      setMasterLocations((prev) => prev.filter((l) => l !== targetName));
-      // Remove from regions as well
-      setRegions((prev) =>
-        prev.map((r) => ({
-          ...r,
-          locations: r.locations.filter((l) => l !== targetName),
-        }))
-      );
+      nextLocations = masterLocations.filter((l) => l !== targetName);
+      nextRegions = regions.map((r) => ({
+        ...r,
+        locations: r.locations.filter((l) => l !== targetName),
+      }));
       showToast(`Master lokasi "${targetName}" berhasil dihapus`, 'success');
     }
 
+    setMasterLocations(nextLocations);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
     setDoubleDeleteConfig((prev) => ({ ...prev, isOpen: false, confirmed: false }));
   };
 
   // Reset to Initial
   const handleResetToInitial = () => {
-    setMasterLocations(INITIAL_MASTER_LOCATIONS);
-    setRegions(INITIAL_REGIONS);
+    const nextLocations: string[] = [];
+    const nextRegions: RegionConfig[] = [];
+    setMasterLocations(nextLocations);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, false);
     setFlatSearchQuery('');
     setFlatCurrentPage(1);
     setIsPortalActivated(false);
@@ -478,16 +517,20 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                 <label className="font-label-md text-label-md text-on-surface font-medium">
                   Lokasi Cabang Perdana <span className="text-outline font-normal">(opsional)</span>
                 </label>
-                <input
-                  type="text"
+                <select
                   value={newRegionInitialBranch}
                   onChange={(e) => setNewRegionInitialBranch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddRegionSubmit()}
-                  placeholder="Contoh: Surabaya Hub"
                   className="px-3.5 py-2.5 rounded-DEFAULT bg-surface-container-low border border-outline/20 text-on-surface font-body-md focus:border-primary outline-none"
-                />
+                >
+                  <option value="">Pilih lokasi dari Master Data</option>
+                  {masterLocations.map((location) => (
+                    <option key={location} value={location}>
+                      {location}
+                    </option>
+                  ))}
+                </select>
                 <span className="text-outline text-[12px]">
-                  Lokasi ini akan otomatis didaftarkan pula ke database Master Lokasi jika belum ada.
+                  Pilih lokasi yang sudah terdaftar di Master Data. Lokasi baru dapat ditambahkan setelah wilayah dibuat.
                 </span>
               </div>
             </div>

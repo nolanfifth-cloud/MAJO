@@ -17,6 +17,9 @@ export interface ProfilTeknisiViewProps {
   displayName?: string;
   displayUsername?: string;
   userInitials?: string;
+  location?: string;
+  portalAddress?: string;
+  createdAt?: string;
   onTriggerToast: (msg: string) => void;
   onOpenLogoutModal: () => void;
 }
@@ -25,6 +28,9 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
   displayName = 'Pengguna',
   displayUsername = '',
   userInitials = 'U1',
+  location = '',
+  portalAddress = '',
+  createdAt = '',
   onTriggerToast,
   onOpenLogoutModal,
 }) => {
@@ -40,7 +46,7 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
   const [copied, setCopied] = useState(false);
 
   const handleCopyPortal = () => {
-    const portalUrl = 'portal.majo.id/org/pt-majo-logistik-indo';
+    const portalUrl = portalAddress;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(portalUrl).catch(() => {});
     }
@@ -85,7 +91,7 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
         <div className="flex items-center space-x-2.5">
           <div className="px-3.5 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold flex items-center space-x-1.5 shadow-2xs">
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-            <span>Akun Aktif &amp; Terverifikasi SSO</span>
+            <span>Akun aktif</span>
           </div>
         </div>
       </div>
@@ -109,14 +115,14 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
-                    @{displayUsername} • Field Maintenance Engineer
+                    @{displayUsername}
                   </p>
                 </div>
               </div>
 
               <button
                 type="button"
-                onClick={() => onTriggerToast('Informasi profil disinkronisasi dengan server HR')}
+                onClick={() => onTriggerToast('Informasi profil diambil dari data akun yang tersimpan')}
                 className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700 transition flex items-center space-x-1.5 shadow-sm self-start sm:self-center cursor-pointer"
               >
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
@@ -136,7 +142,7 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                     Identitas Kerja &amp; Pegawai Resmi
                   </div>
                   <div className="text-sm font-bold text-[#0C1B33] mt-0.5 break-words">
-                    Unit TI / Medan – Hub Operasional
+                    {location || 'Unit kerja belum ditentukan'}
                   </div>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                     Ditetapkan resmi di bawah Divisi Operasional Jaringan &amp; Infrastruktur Gardu.
@@ -153,7 +159,7 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                     <span>Lokasi Kerja Resmi</span>
                   </div>
                   <div className="sm:col-span-2 font-semibold text-slate-800">
-                    Medan – Hub Operasional &amp; Gardu Induk SOR 1
+                    {location || 'Lokasi kerja belum ditentukan'}
                   </div>
                 </div>
 
@@ -165,7 +171,7 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                   </div>
                   <div className="sm:col-span-2 flex items-center justify-between">
                     <span className="font-mono font-medium text-blue-600 truncate max-w-[280px]">
-                      portal.majo.id/org/pt-majo-logistik-indo
+                      {portalAddress || 'Portal belum ditentukan'}
                     </span>
                     <button
                       type="button"
@@ -189,10 +195,7 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                     <span>Kapan Akun Dibuat</span>
                   </div>
                   <div className="sm:col-span-2 font-medium text-slate-700 flex flex-wrap items-center gap-1.5">
-                    <span>12 Januari 2025, 08:30 WIB</span>
-                    <span className="text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
-                      Aktif 1 Tahun 8 Bulan
-                    </span>
+                    <span>{createdAt ? new Date(createdAt).toLocaleString('id-ID') : 'Belum tersedia'}</span>
                   </div>
                 </div>
 
@@ -354,10 +357,10 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                 </div>
                 <div className="text-xs font-medium text-slate-600">
-                  Desktop Web Browser - Chrome
+                  Sesi browser saat ini
                 </div>
                 <div className="text-[11px] text-emerald-700 font-semibold">
-                  (Sesi Ini - Aktif Sekarang di Medan Hub)
+                  (aktif pada perangkat ini)
                 </div>
               </div>
             </div>

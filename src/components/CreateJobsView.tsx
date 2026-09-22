@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ChecklistItem, PmItem } from '../types';
+import { ChecklistItem, PmItem, RegionConfig } from '../types';
+import { getPortalConfig, PM_TYPE_DEFINITIONS, PmTypeKey } from '../services/workflowStore';
+import { loadPortalConfigFromFirestore } from '../services/firestoreStore';
 
 interface CreateJobsViewProps {
   onNavigateToDashboard: () => void;
@@ -13,8 +15,29 @@ interface Branch {
   checked: boolean;
 }
 
+const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+
 const INITIAL_ITEMS: ChecklistItem[] = [];
 const INITIAL_BRANCHES: Branch[] = [];
+
+const mapConfigToBranches = (config?: { masterWilayah?: string[]; masterGroups?: RegionConfig[] }): Branch[] => {
+  if (!config) return INITIAL_BRANCHES;
+
+  const groups = config.masterGroups && config.masterGroups.length > 0
+    ? config.masterGroups
+    : config.masterWilayah && config.masterWilayah.length > 0
+      ? [{ id: 'default-region', name: 'Wilayah Utama', locations: config.masterWilayah }]
+      : [];
+
+  return groups.flatMap((group, groupIndex) =>
+    group.locations.map((location, locationIndex) => ({
+      id: `${group.id || `group-${groupIndex}`}-${locationIndex}`,
+      name: location,
+      regionKey: `sor${Math.min(groupIndex + 1, 2)}` as 'sor1' | 'sor2',
+      checked: true,
+    }))
+  );
+};
 
 export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   onNavigateToDashboard,
@@ -24,17 +47,47 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const [jobTitle, setJobTitle] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [dateType, setDateType] = useState<'single' | 'range'>('range');
   const [slaEnabled, setSlaEnabled] = useState(true);
   const [conditionOptions, setConditionOptions] = useState<string[]>([]);
   const [items, setItems] = useState<ChecklistItem[]>(INITIAL_ITEMS);
   const [branches, setBranches] = useState<Branch[]>(INITIAL_BRANCHES);
+  const [regionNames, setRegionNames] = useState<string[]>([]);
 
   // New item form state
   const [newItemText, setNewItemText] = useState('');
+  const [newItemPmType, setNewItemPmType] = useState<PmTypeKey>('suhu_ruangan');
   const [togglePhoto, setTogglePhoto] = useState(true);
   const [toggleCondition, setToggleCondition] = useState(true);
   const [toggleTimestamp, setToggleTimestamp] = useState(true);
   const [toggleNotes, setToggleNotes] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateBranches = async () => {
+      try {
+        const cloudConfig = await loadPortalConfigFromFirestore();
+        const config = cloudConfig || getPortalConfig();
+        if (cancelled) return;
+        const nextBranches = mapConfigToBranches(config);
+        setBranches(nextBranches);
+        setRegionNames((config.masterGroups || []).map((group) => group.name));
+      } catch {
+        const config = getPortalConfig();
+        if (!cancelled) {
+          setBranches(mapConfigToBranches(config));
+          setRegionNames((config.masterGroups || []).map((group) => group.name));
+        }
+      }
+    };
+
+    hydrateBranches();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Modals state
   const [isConditionsModalOpen, setIsConditionsModalOpen] = useState(false);
@@ -60,7 +113,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   // Date calculation
   const durationText = useMemo(() => {
     if (!slaEnabled) return 'Tanpa Tenggat Waktu / Fleksibel';
-    if (!startDate || !endDate) return '14 Hari Kalender';
+    if (!startDate || !endDate) return 'Tanggal belum ditentukan';
     const d1 = new Date(startDate);
     const d2 = new Date(endDate);
     if (d2 < d1) return '0 Hari';
@@ -71,7 +124,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
 
   const footerDeadlineText = useMemo(() => {
     if (!slaEnabled) return 'Target Deadline: Fleksibel / Terbuka (Tanpa Batas Waktu Kunci)';
-    if (!endDate) return 'Target Deadline: 28 Mei 2026 (SLA 14 Hari Kalender)';
+    if (!endDate) return 'Target Deadline: Belum ditentukan';
     const d2 = new Date(endDate);
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
     const formattedEnd = `${d2.getDate()} ${months[d2.getMonth()]} ${d2.getFullYear()}`;
@@ -87,11 +140,8 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const totalCheckedCount = useMemo(() => branches.filter((b) => b.checked).length, [branches]);
 
   const activeRegionsCount = useMemo(() => {
-    let count = 0;
-    if (sor1CheckedCount > 0) count++;
-    if (sor2CheckedCount > 0) count++;
-    return count;
-  }, [sor1CheckedCount, sor2CheckedCount]);
+    return new Set(branches.filter((branch) => branch.checked).map((branch) => branch.regionKey)).size;
+  }, [branches]);
 
   // Master Checkbox states
   const isAllChecked = totalCheckedCount === branches.length && branches.length > 0;
@@ -176,6 +226,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     const newItem: ChecklistItem = {
       id: `item-${Date.now()}`,
       text: trimmed,
+      pmType: newItemPmType,
       hasPhoto: togglePhoto,
       conditionText: toggleCondition ? `Kondisi: ${conditionOptions.join(' / ')}` : '',
       hasTimestamp: toggleTimestamp,
@@ -210,8 +261,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     setJobTitle('');
     setStartDate('');
     setEndDate('');
+    setDateType('range');
     setSlaEnabled(true);
-    setBranches(INITIAL_BRANCHES);
+    const config = getPortalConfig();
+    setBranches(mapConfigToBranches(config));
+    setRegionNames((config.masterGroups || []).map((group) => group.name));
     setItems(INITIAL_ITEMS);
     setConditionOptions([]);
     setIsResetModalOpen(false);
@@ -250,6 +304,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
         dates: `${startDate} - ${endDate}`,
         startDate: startDate,
         endDate: endDate,
+        dateType,
+        singleDate: dateType === 'single' ? startDate : undefined,
+        areaType: 'wilayah',
+        targetArea: selectedBranchNames.join(', '),
+        targetWilayahList: selectedBranchNames,
         pic: '',
         picRole: '',
         progress: 0,
@@ -272,6 +331,8 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
         modules: items.map((i) => ({
           name: i.text,
           itemCount: 1,
+          pmType: i.pmType,
+          checklist: [i],
         })),
       };
       onJobCreated(newPm);
@@ -609,6 +670,18 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 </span>
               </div>
 
+              <div className="flex items-center gap-2 p-3 rounded-DEFAULT bg-surface-container-low border border-outline-variant/20">
+                <span className="font-label-sm text-secondary font-semibold">Mode tanggal:</span>
+                <select
+                  value={dateType}
+                  onChange={(e) => setDateType(e.target.value as 'single' | 'range')}
+                  className="px-3 py-1.5 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 text-on-surface text-body-sm"
+                >
+                  <option value="range">Rentang tanggal</option>
+                  <option value="single">Satu tanggal</option>
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 {/* Tanggal Mulai */}
                 <div className="flex flex-col gap-1.5">
@@ -648,12 +721,12 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     <span className="material-symbols-outlined text-outline text-[18px]">event_available</span>
                     <input
                       id="job-end-date"
-                      disabled={!slaEnabled}
+                      disabled={!slaEnabled && dateType === 'range'}
                       className={`bg-transparent border-none outline-none w-full text-on-surface font-body-md ${
-                        slaEnabled ? 'cursor-pointer' : 'cursor-not-allowed'
+                        slaEnabled && dateType === 'range' ? 'cursor-pointer' : 'cursor-not-allowed'
                       }`}
                       type="date"
-                      value={endDate}
+                      value={dateType === 'single' ? startDate : endDate}
                       onChange={(e) => handleDateChange('end', e.target.value)}
                     />
                   </div>
@@ -768,7 +841,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                         onChange={(e) => handleToggleRegion('sor1', e.target.checked)}
                       />
                       <span className="font-label-md text-label-md font-bold text-on-surface">
-                        SOR 1 (Sumatera Bagian Utara)
+                        {regionNames[0] || 'Wilayah 1'}
                       </span>
                     </label>
                     <span
@@ -811,7 +884,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                         onChange={(e) => handleToggleRegion('sor2', e.target.checked)}
                       />
                       <span className="font-label-md text-label-md font-bold text-on-surface">
-                        SOR 2 (Jawa Barat &amp; DKI Jakarta)
+                        {regionNames[1] || 'Wilayah 2'}
                       </span>
                     </label>
                     <span
@@ -969,6 +1042,15 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                       }
                     }}
                   />
+                  <select
+                    value={newItemPmType}
+                    onChange={(e) => setNewItemPmType(e.target.value as PmTypeKey)}
+                    className="w-full px-4 py-2.5 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 text-on-surface text-body-sm"
+                  >
+                    {Object.values(PM_TYPE_DEFINITIONS).map((definition) => (
+                      <option key={definition.key} value={definition.key}>{definition.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Field Responses Feature Toggles */}

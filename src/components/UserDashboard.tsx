@@ -3,7 +3,12 @@ import { AuthView, PmItem } from '../types';
 import { RiwayatSelesaiView } from './RiwayatSelesaiView';
 import { ProfilTeknisiView } from './ProfilTeknisiView';
 import { isCloudinaryConfigured, uploadPhotoToCloudinary } from '../services/cloudinary';
-import { loadAdminJobsFromFirestore, saveCompletedReportToFirestore } from '../services/firestoreStore';
+import {
+  loadAdminJobsFromFirestore,
+  loadJobsForLocationFromFirestore,
+  saveCompletedReportToFirestore,
+  saveJobProgressToFirestore,
+} from '../services/firestoreStore';
 import {
   ListChecks,
   Clock,
@@ -49,30 +54,41 @@ interface DeviceItem {
 
 interface JobTabItem {
   id: number;
+  sourceId: string;
   title: string;
   pmType?: string;
+  dates?: string;
+  regions?: string;
   devices: DeviceItem[];
 }
 
 interface UserDashboardProps {
   onNavigate: (view: AuthView) => void;
+  onLogout?: () => void;
   currentUser?: {
     uid?: string;
     username: string;
     name?: string;
     role?: 'admin' | 'user';
     location?: string;
+    email?: string;
+    portalAddress?: string;
+    createdAt?: string;
   };
 }
 
 export const UserDashboard: React.FC<UserDashboardProps> = ({
   onNavigate,
+  onLogout,
   currentUser = {
     uid: undefined,
     username: '',
     name: '',
     role: 'user',
     location: '',
+    email: '',
+    portalAddress: '',
+    createdAt: '',
   },
 }) => {
   // Navigation & Sub-views state
@@ -106,16 +122,22 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   useEffect(() => {
     let cancelled = false;
-    loadAdminJobsFromFirestore().then((jobs) => {
+    const jobsLoader = currentUser.location
+      ? loadJobsForLocationFromFirestore(currentUser.location)
+      : loadAdminJobsFromFirestore();
+    jobsLoader.then((jobs) => {
       if (cancelled || jobs.length === 0) return;
       const assignedJobs = jobs.reduce<Record<number, JobTabItem>>((result, job: PmItem, index) => {
         result[index + 1] = {
           id: index + 1,
+          sourceId: job.id,
           title: job.title,
-          pmType: job.modules?.[0]?.name,
+          pmType: job.modules?.[0]?.pmType || job.modules?.[0]?.name,
+          dates: job.dates,
+          regions: job.regions,
           devices: (job.modules || []).map((module, moduleIndex) => ({
             id: `${job.id}_${moduleIndex + 1}`,
-            location: job.regions,
+            location: job.targetWilayahList?.[0] || job.regions,
             expanded: moduleIndex === 0,
             statusState: 'INITIAL',
             formData: {
@@ -138,6 +160,26 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const activeJob = jobsDatabase[currentJobId];
+    if (!activeJob?.sourceId || !currentUser.uid) return;
+    void saveJobProgressToFirestore(
+      activeJob.sourceId,
+      currentUser.uid,
+      currentUser.location || '',
+      activeJob.devices,
+      {
+        progress: activeJob.devices.length
+          ? Math.round((activeJob.devices.filter((device) => device.statusState === 'DONE').length / activeJob.devices.length) * 100)
+          : 0,
+        doneCount: activeJob.devices.filter((device) => device.statusState === 'DONE').length,
+        totalCount: activeJob.devices.length,
+      }
+    ).catch(() => {
+      // Local state remains available when the cloud is unreachable.
+    });
+  }, [jobsDatabase, currentJobId, currentUser.uid, currentUser.location]);
 
   // Submission & Confirmation modal states
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
@@ -205,6 +247,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
     const submittedReport = {
       id: `PM-${new Date().getFullYear()}-${Date.now()}`,
+      jobId: activeJob.sourceId,
+      submittedBy: currentUser?.uid || '',
       year: new Date().getFullYear(),
       title: activeJob.title,
       completedAt:
@@ -250,7 +294,10 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   // Current active job
   const activeJob = jobsDatabase[currentJobId] || {
     id: currentJobId,
+    sourceId: '',
     title: 'Belum ada penugasan dari admin',
+    dates: '',
+    regions: '',
     devices: [],
   };
 
@@ -476,7 +523,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs text-slate-700 font-medium">
             <Radio className="w-3.5 h-3.5 text-slate-500" />
             <span>
-              Unit Operasi: <strong className="text-slate-900 font-semibold">Medan - Hub Operasional</strong>
+              Unit Operasi: <strong className="text-slate-900 font-semibold">{currentUser.location || 'Belum ditentukan'}</strong>
             </span>
           </div>
         </div>
@@ -540,7 +587,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                     </div>
                   </div>
                   <div className="mt-2 text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold inline-block">
-                    Field User • Medan - Hub Operasional
+                    Field User • {currentUser.location || 'Lokasi belum ditentukan'}
                   </div>
                 </div>
 
@@ -704,7 +751,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                         <div className="flex items-center gap-1.5 font-medium">
                           <CalendarCheck className="w-3.5 h-3.5 text-slate-400" />
                           <span>
-                            Rentang Waktu: <strong className="text-slate-800 font-semibold">01 Sep 2026 – 28 Sep 2026</strong>
+                            Rentang Waktu: <strong className="text-slate-800 font-semibold">{activeJob.dates || 'Belum ditentukan'}</strong>
                           </span>
                           <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
                             (Dengan Batas Waktu)
@@ -713,7 +760,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                         <div className="flex items-center gap-1.5">
                           <MapPin className="w-3.5 h-3.5 text-slate-400" />
                           <span>
-                            Wilayah Tugas: <strong>SOR 1 (Sumatera Bagian Utara) • Medan</strong>
+                            Wilayah Tugas: <strong>{activeJob.regions || currentUser.location || 'Belum ditentukan'}</strong>
                           </span>
                         </div>
                       </div>
@@ -807,7 +854,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                             <span>{job.title}</span>
                             <span
                               className={`w-2 h-2 rounded-full ${
-                                job.id === 1 ? 'bg-emerald-500' : 'bg-slate-300'
+                                job.devices.some((device) => device.statusState === 'DONE')
+                                  ? 'bg-emerald-500'
+                                  : 'bg-slate-300'
                               }`}
                             ></span>
                           </button>
@@ -1241,6 +1290,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               displayName={displayName}
               displayUsername={displayUsername}
               userInitials={userInitials}
+              location={currentUser.location}
+              portalAddress={currentUser.portalAddress}
+              createdAt={currentUser.createdAt}
               onTriggerToast={triggerToast}
               onOpenLogoutModal={() => setShowLogoutModal(true)}
             />
@@ -1250,7 +1302,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           {/* VIEW C: RIWAYAT SELESAI */}
           {/* ===================================================================== */}
           {activeMenu === 'riwayat' && (
-            <RiwayatSelesaiView onTriggerToast={triggerToast} />
+            <RiwayatSelesaiView onTriggerToast={triggerToast} userUid={currentUser.uid} />
           )}
         </main>
       </div>
@@ -1316,7 +1368,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   setShowLogoutModal(false);
-                  onNavigate('login');
+                  onLogout?.();
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
               >
@@ -1348,12 +1400,12 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs text-slate-700">
               <div className="flex justify-between">
                 <span className="text-slate-500">Pekerjaan:</span>
-                <span className="font-semibold text-slate-900">PM September 2026</span>
+                <span className="font-semibold text-slate-900">{activeJob.title}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Wilayah Tugas:</span>
                 <span className="font-semibold text-slate-900">
-                  {currentUser?.location || 'Medan – Hub Operasional'}
+                  {currentUser?.location || 'Belum ditentukan'}
                 </span>
               </div>
               <div className="flex justify-between">
