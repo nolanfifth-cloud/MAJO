@@ -59,6 +59,20 @@ export async function registerAccountWithFirebase(
     username: account.username.toLowerCase(),
     role: account.role,
   });
+
+  try {
+    const cached = JSON.parse(localStorage.getItem('majo_accounts') || '[]');
+    const nextAccounts = Array.isArray(cached) ? cached : [];
+    const existingIndex = nextAccounts.findIndex((item: RegisteredAccount) => item.username?.toLowerCase() === account.username.toLowerCase());
+    if (existingIndex >= 0) {
+      nextAccounts[existingIndex] = { ...account, uid: credential.user.uid };
+    } else {
+      nextAccounts.push({ ...account, uid: credential.user.uid });
+    }
+    localStorage.setItem('majo_accounts', JSON.stringify(nextAccounts));
+  } catch {
+    // Ignore local cache issues.
+  }
 }
 
 export const registerAdminWithFirebase = registerAccountWithFirebase;

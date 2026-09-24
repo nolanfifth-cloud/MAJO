@@ -670,18 +670,6 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 p-3 rounded-DEFAULT bg-surface-container-low border border-outline-variant/20">
-                <span className="font-label-sm text-secondary font-semibold">Mode tanggal:</span>
-                <select
-                  value={dateType}
-                  onChange={(e) => setDateType(e.target.value as 'single' | 'range')}
-                  className="px-3 py-1.5 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 text-on-surface text-body-sm"
-                >
-                  <option value="range">Rentang tanggal</option>
-                  <option value="single">Satu tanggal</option>
-                </select>
-              </div>
-
               <div className="grid grid-cols-2 gap-3">
                 {/* Tanggal Mulai */}
                 <div className="flex flex-col gap-1.5">

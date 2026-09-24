@@ -18,6 +18,7 @@ import {
   onAuthStateChanged,
   signOut,
 } from './services/firebase';
+import { setActivePortalAddress } from './services/workflowStore';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AuthView>('login');
@@ -85,6 +86,10 @@ export default function App() {
           createdAt: account.createdAt,
         };
         setCurrentUser(restoredUser);
+        localStorage.setItem('majo_session', JSON.stringify(restoredUser));
+        if (restoredUser.portalAddress) {
+          setActivePortalAddress(restoredUser.portalAddress, restoredUser.uid || restoredUser.username);
+        }
         setCurrentView(account.role === 'admin' ? 'admin_dashboard' : 'user_dashboard');
       } catch {
         if (!cancelled) setCurrentView('login');
@@ -117,7 +122,11 @@ export default function App() {
       name: account.name,
       role: account.role,
       location: account.location,
+      portalAddress: account.portalAddress,
     }));
+    if (account.portalAddress) {
+      setActivePortalAddress(account.portalAddress, account.uid || account.username);
+    }
     setCurrentView(account.role === 'admin' ? 'admin_dashboard' : 'user_dashboard');
   };
 
@@ -133,11 +142,27 @@ export default function App() {
   }) => {
     setCurrentUser(user);
     localStorage.setItem('majo_session', JSON.stringify(user));
+    if (user.portalAddress) {
+      setActivePortalAddress(user.portalAddress, user.uid || user.username);
+    }
   };
 
   const handleLogout = async () => {
     if (firebaseAuth) await signOut(firebaseAuth);
     localStorage.removeItem('majo_session');
+    try {
+      const session = localStorage.getItem('majo_session');
+      if (session) {
+        const parsed = JSON.parse(session) as { uid?: string; username?: string };
+        const identity = parsed.uid ? `uid_${parsed.uid}` : parsed.username ? `user_${parsed.username.toLowerCase()}` : '';
+        if (identity) {
+          localStorage.removeItem(`majo_active_portal_address_${identity}`);
+        }
+      }
+    } catch {
+      // Ignore legacy session parsing issues.
+    }
+    localStorage.removeItem('majo_active_portal_address');
     setCurrentUser({ username: '', name: '', role: 'user', location: '', email: '', portalAddress: '', createdAt: '' });
     setCurrentView('login');
   };

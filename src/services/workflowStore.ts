@@ -169,28 +169,150 @@ export const INITIAL_MASTER_WILAYAH: string[] = [];
 export const INITIAL_MASTER_GROUPS: RegionConfig[] = [];
 export const INITIAL_WORKFLOW_JOBS: WorkflowJob[] = [];
 
-// Helper methods with localStorage fallback
-export function getPortalConfig(): PortalMasterConfig {
+export function normalizePortalAddress(value: string): string {
+  return (value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/$/, '')
+    .replace(/\s+/g, '');
+}
+
+export function getPortalStorageKey(portalAddress?: string): string {
+  const target = normalizePortalAddress(portalAddress || getActivePortalAddress() || DEFAULT_PORTAL_ADDRESS);
+  if (!target) return 'majo_portal_config';
+  return `majo_portal_config_${target.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
+}
+
+function getCurrentSessionIdentity(): string {
   try {
-    const raw = localStorage.getItem('majo_portal_config');
-    if (raw) {
-      return JSON.parse(raw);
+    const session = localStorage.getItem('majo_session');
+    if (!session) return '';
+    const parsed = JSON.parse(session) as { username?: string; uid?: string };
+    if (parsed.uid) return `uid_${parsed.uid}`;
+    if (parsed.username) return `user_${parsed.username.toLowerCase()}`;
+  } catch {
+    // Ignore invalid storage values.
+  }
+  return '';
+}
+
+export function getActivePortalAddress(userKey?: string): string {
+  const identity = userKey || getCurrentSessionIdentity();
+
+  try {
+    if (identity) {
+      const scoped = localStorage.getItem(`majo_active_portal_address_${identity}`);
+      if (scoped) return normalizePortalAddress(scoped);
+    }
+
+    const storedActive = localStorage.getItem('majo_active_portal_address');
+    if (storedActive) return normalizePortalAddress(storedActive);
+
+    const session = localStorage.getItem('majo_session');
+    if (session) {
+      const parsed = JSON.parse(session) as { portalAddress?: string };
+      if (parsed.portalAddress) return normalizePortalAddress(parsed.portalAddress);
+    }
+  } catch {
+    // Ignore invalid storage values.
+  }
+  return DEFAULT_PORTAL_ADDRESS;
+}
+
+export function setActivePortalAddress(portalAddress: string, userKey?: string) {
+  const valid = normalizePortalAddress(portalAddress || DEFAULT_PORTAL_ADDRESS);
+  if (!valid) return;
+
+  const identity = userKey || getCurrentSessionIdentity();
+
+  try {
+    if (identity) {
+      localStorage.setItem(`majo_active_portal_address_${identity}`, valid);
+      return;
+    }
+    localStorage.setItem('majo_active_portal_address', valid);
+  } catch {
+    // Ignore invalid storage values.
+  }
+}
+
+export function getPortalConfigForAddress(portalAddress?: string): PortalMasterConfig {
+  const targetAddress = normalizePortalAddress(portalAddress || getActivePortalAddress() || DEFAULT_PORTAL_ADDRESS) || DEFAULT_PORTAL_ADDRESS;
+
+  try {
+    const scopedKey = getPortalStorageKey(targetAddress);
+    const scopedRaw = localStorage.getItem(scopedKey);
+    if (scopedRaw) {
+      const parsed = JSON.parse(scopedRaw) as PortalMasterConfig;
+      return {
+        portalAddress: normalizePortalAddress(parsed.portalAddress || targetAddress) || targetAddress,
+        portalLink: normalizePortalAddress(parsed.portalLink || parsed.portalAddress || targetAddress) || targetAddress,
+        isActivated: Boolean(parsed.isActivated),
+        masterWilayah: Array.isArray(parsed.masterWilayah) ? parsed.masterWilayah : [],
+        masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+      };
+    }
+
+    const legacyRaw = localStorage.getItem('majo_portal_config');
+    if (legacyRaw) {
+      const parsed = JSON.parse(legacyRaw) as PortalMasterConfig;
+      const legacyAddress = normalizePortalAddress(parsed.portalAddress || targetAddress);
+      if (!legacyAddress || legacyAddress === targetAddress) {
+        return {
+          portalAddress: legacyAddress || targetAddress,
+          portalLink: normalizePortalAddress(parsed.portalLink || parsed.portalAddress || targetAddress) || targetAddress,
+          isActivated: Boolean(parsed.isActivated),
+          masterWilayah: Array.isArray(parsed.masterWilayah) ? parsed.masterWilayah : [],
+          masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+        };
+      }
     }
   } catch {
     // fallback
   }
+
   return {
-    portalAddress: DEFAULT_PORTAL_ADDRESS,
-    portalLink: DEFAULT_PORTAL_LINK,
+    portalAddress: targetAddress,
+    portalLink: targetAddress,
     isActivated: false,
     masterWilayah: INITIAL_MASTER_WILAYAH,
     masterGroups: INITIAL_MASTER_GROUPS,
   };
 }
 
-export function savePortalConfig(config: PortalMasterConfig) {
+// Helper methods with localStorage fallback
+export function getPortalConfig(): PortalMasterConfig {
+  const activeAddress = getActivePortalAddress();
+  const config = getPortalConfigForAddress(activeAddress);
+  return {
+    ...config,
+    portalAddress: normalizePortalAddress(config.portalAddress || activeAddress) || activeAddress,
+    portalLink: normalizePortalAddress(config.portalLink || config.portalAddress || activeAddress) || activeAddress,
+  };
+}
+
+export function savePortalConfig(config: PortalMasterConfig, portalAddressOverride?: string) {
+  const address = normalizePortalAddress(portalAddressOverride || config.portalAddress || getActivePortalAddress() || DEFAULT_PORTAL_ADDRESS) || DEFAULT_PORTAL_ADDRESS;
+  const next = {
+    ...config,
+    portalAddress: address,
+    portalLink: normalizePortalAddress(config.portalLink || config.portalAddress || address) || address,
+    isActivated: Boolean(config.isActivated),
+    masterWilayah: Array.isArray(config.masterWilayah) ? config.masterWilayah : [],
+    masterGroups: Array.isArray(config.masterGroups) ? config.masterGroups : [],
+  };
   try {
-    localStorage.setItem('majo_portal_config', JSON.stringify(config));
+    const identity = getCurrentSessionIdentity();
+    const scopedKey = getPortalStorageKey(address);
+    localStorage.setItem(scopedKey, JSON.stringify(next));
+    localStorage.setItem('majo_portal_config', JSON.stringify(next));
+
+    if (identity) {
+      localStorage.setItem(`majo_active_portal_address_${identity}`, address);
+    } else {
+      localStorage.setItem('majo_active_portal_address', address);
+    }
   } catch {
     // fallback
   }
@@ -218,28 +340,25 @@ export function saveWorkflowJobs(jobs: WorkflowJob[]) {
 
 export function validatePortalAddress(input: string): boolean {
   if (!input || !input.trim()) return false;
-  const cleaned = input.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const config = getPortalConfig();
-  const validLink = config.portalLink.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const validAddress = config.portalAddress.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const cleaned = normalizePortalAddress(input);
+  if (!cleaned) return false;
 
-  // Also check stored accounts
-  let customAddresses: string[] = [];
+  const config = getPortalConfig();
+  const validLink = normalizePortalAddress(config.portalLink);
+  const validAddress = normalizePortalAddress(config.portalAddress);
+
+  const customAddresses = new Set<string>();
   try {
     const stored = localStorage.getItem('majo_accounts');
     if (stored) {
       const accounts: RegisteredAccount[] = JSON.parse(stored);
-      customAddresses = accounts
+      accounts
         .filter((a) => a.role === 'admin' && a.portalAddress)
-        .map((a) => a.portalAddress.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, ''));
+        .forEach((a) => customAddresses.add(normalizePortalAddress(a.portalAddress)));
     }
   } catch {
     // ignore
   }
 
-  return (
-    cleaned === validAddress ||
-    cleaned === validLink ||
-    customAddresses.includes(cleaned)
-  );
+  return cleaned === validAddress || cleaned === validLink || customAddresses.has(cleaned);
 }

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { RegionConfig, StaffResetRequest } from '../types';
-import { getPortalConfig, savePortalConfig } from '../services/workflowStore';
+import { getPortalConfig, getPortalConfigForAddress, savePortalConfig } from '../services/workflowStore';
 import { hasRealPortalLocation, loadPortalConfigFromFirestore, savePortalConfigToFirestore } from '../services/firestoreStore';
 
 interface LinkPortalViewProps {
@@ -18,7 +18,19 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   onNavigateToCreateJobs,
   onConfigurationCompleted,
 }) => {
-  const localPortalConfig = getPortalConfig();
+  const activePortalAddress = (() => {
+    try {
+      const session = localStorage.getItem('majo_session');
+      if (session) {
+        const parsed = JSON.parse(session) as { portalAddress?: string };
+        if (parsed.portalAddress) return parsed.portalAddress;
+      }
+    } catch {
+      // ignore invalid session
+    }
+    return getPortalConfig().portalAddress;
+  })();
+  const localPortalConfig = getPortalConfigForAddress(activePortalAddress);
 
   // State: Tab & Mode
   const [currentTab, setCurrentTab] = useState<'wilayah' | 'hanya-lokasi'>('wilayah');
@@ -28,7 +40,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const [regions, setRegions] = useState<RegionConfig[]>(localPortalConfig.masterGroups || INITIAL_REGIONS);
   const [isPortalActivated, setIsPortalActivated] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('majo_portal_configured') === 'true' || localPortalConfig.isActivated;
+      return Boolean(localPortalConfig.isActivated);
     } catch {
       return false;
     }
@@ -41,7 +53,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   useEffect(() => {
     let cancelled = false;
-    loadPortalConfigFromFirestore().then((config) => {
+    loadPortalConfigFromFirestore(activePortalAddress).then((config) => {
       if (!config || cancelled) return;
       const hasCloudLocations = Boolean(
         config.masterWilayah?.length || config.masterGroups?.some((group) => group.locations?.length)
@@ -50,7 +62,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
         setMasterLocations(config.masterWilayah || []);
         setRegions(config.masterGroups || []);
         setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
-        savePortalConfig(config);
+        savePortalConfig(config, activePortalAddress);
       }
     }).catch((error) => {
       if (!cancelled) {
@@ -61,7 +73,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activePortalAddress]);
 
   // State: Master Lokasi Search & Pagination
   const [flatSearchQuery, setFlatSearchQuery] = useState<string>('');
@@ -142,18 +154,17 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     nextRegions: RegionConfig[],
     nextActivated = isPortalActivated
   ) => {
-    const currentConfig = getPortalConfig();
+    const currentConfig = getPortalConfigForAddress(activePortalAddress);
     const nextConfig: typeof currentConfig = {
       ...currentConfig,
-      portalAddress: currentConfig.portalAddress || 'pt-majo-logistik-indo.majo.id',
-      portalLink: currentConfig.portalLink || 'pt-majo-logistik-indo.majo.id',
+      portalAddress: activePortalAddress || currentConfig.portalAddress || 'pt-majo-logistik-indo.majo.id',
+      portalLink: activePortalAddress || currentConfig.portalLink || 'pt-majo-logistik-indo.majo.id',
       isActivated: nextActivated,
       masterWilayah: nextLocations,
       masterGroups: nextRegions,
     };
 
-    savePortalConfig(nextConfig);
-    localStorage.setItem('majo_portal_configured', String(nextActivated));
+    savePortalConfig(nextConfig, activePortalAddress);
 
     firestoreSaveQueue.current = firestoreSaveQueue.current
       .then(() => savePortalConfigToFirestore(nextConfig))
@@ -185,7 +196,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       showToast('Tautan terkunci! Tambahkan minimal 1 lokasi lalu simpan konfigurasi portal terlebih dahulu.', 'info');
       return;
     }
-    const url = 'portal.majo.id/org/pt-majo-logistik-indo';
+    const config = getPortalConfigForAddress(activePortalAddress);
+    const url = config.portalLink || `${activePortalAddress}/register`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(url).catch(() => {});
     }
@@ -1024,10 +1036,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                 <div className="flex-1 flex items-center px-4 py-3 rounded-DEFAULT bg-surface-container-low gap-3 border border-outline-variant/20">
                   <span className="material-symbols-outlined text-outline text-[20px]">public</span>
                   <span className="font-label-md text-label-md text-on-surface tracking-tight select-all">
-                    portal.majo.id/org/
-                  </span>
-                  <span className="font-label-md text-label-md text-primary font-bold tracking-wide">
-                    pt-majo-logistik-indo
+                    {activePortalAddress ? activePortalAddress.replace(/^https?:\/\//i, '') : 'portal.majo.id/org/'}
                   </span>
                   <span className="ml-auto px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface-variant font-label-sm text-label-sm uppercase font-semibold">
                     ID-PRO

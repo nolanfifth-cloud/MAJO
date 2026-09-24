@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
@@ -9,23 +10,32 @@ import {
 } from 'firebase/firestore';
 import { PmItem, RegisteredAccount, RegionConfig } from '../types';
 import { firestore, isFirebaseConfigured } from './firebase';
-import { PortalMasterConfig } from './workflowStore';
+import { PortalMasterConfig, getActivePortalAddress, normalizePortalAddress } from './workflowStore';
 
-const portalDoc = () => {
-  if (!firestore) throw new Error('Firebase belum dikonfigurasi.');
-  return doc(firestore, 'appConfig', 'portal');
+const portalDocId = (portalAddress?: string): string => {
+  const target = normalizePortalAddress(portalAddress || getActivePortalAddress() || 'portal');
+  return target || 'portal';
 };
 
-export async function loadPortalConfigFromFirestore(): Promise<PortalMasterConfig | null> {
+const portalDoc = (portalAddress?: string) => {
+  if (!firestore) throw new Error('Firebase belum dikonfigurasi.');
+  return doc(firestore, 'appConfig', portalDocId(portalAddress));
+};
+
+export async function loadPortalConfigFromFirestore(portalAddress?: string): Promise<PortalMasterConfig | null> {
   if (!isFirebaseConfigured || !firestore) return null;
-  const snapshot = await getDocs(query(collection(firestore, 'appConfig')));
-  const portal = snapshot.docs.find((item) => item.id === 'portal');
-  return portal?.exists() ? (portal.data() as PortalMasterConfig) : null;
+  const snapshot = await getDoc(portalDoc(portalAddress));
+  return snapshot.exists() ? (snapshot.data() as PortalMasterConfig) : null;
 }
 
 export async function savePortalConfigToFirestore(config: PortalMasterConfig): Promise<void> {
   if (!isFirebaseConfigured || !firestore) return;
-  await setDoc(portalDoc(), config, { merge: true });
+  const address = normalizePortalAddress(config.portalAddress || getActivePortalAddress() || 'portal');
+  await setDoc(portalDoc(address), {
+    ...config,
+    portalAddress: address,
+    portalLink: normalizePortalAddress(config.portalLink || config.portalAddress || address) || address,
+  }, { merge: true });
 }
 
 export async function loadAdminJobsFromFirestore(): Promise<PmItem[]> {

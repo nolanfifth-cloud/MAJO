@@ -2,7 +2,10 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { AuthView, UserRole, RegisteredAccount } from '../types';
 import {
   getPortalConfig,
+  getPortalConfigForAddress,
+  normalizePortalAddress,
   savePortalConfig,
+  setActivePortalAddress,
   validatePortalAddress,
 } from '../services/workflowStore';
 import { isFirebaseConfigured, registerAccountWithFirebase } from '../services/firebase';
@@ -48,12 +51,21 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    const activePortal = (portalAddress || portalConfig.portalAddress || '').trim();
+    if (!activePortal) return;
 
-    loadPortalConfigFromFirestore()
+    loadPortalConfigFromFirestore(activePortal)
       .then((cloudConfig) => {
         if (!cloudConfig || cancelled) return;
-        setPortalConfig(cloudConfig);
-        savePortalConfig(cloudConfig);
+        const matchingConfig = getPortalConfigForAddress(activePortal);
+        const normalized = {
+          ...matchingConfig,
+          ...cloudConfig,
+          portalAddress: normalizePortalAddress(cloudConfig.portalAddress || matchingConfig.portalAddress || activePortal),
+          portalLink: normalizePortalAddress(cloudConfig.portalLink || matchingConfig.portalLink || cloudConfig.portalAddress || activePortal),
+        };
+        setPortalConfig(normalized);
+        savePortalConfig(normalized, activePortal);
       })
       .catch(() => {
         // The local portal configuration remains available offline.
@@ -62,7 +74,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [portalAddress]);
 
   useEffect(() => {
     if (availableLocations.length > 0 && !availableLocations.includes(selectedLocation)) {
@@ -160,19 +172,26 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         savePortalConfig(updatedPortalConfig);
       }
 
+      const normalizedPortalAddress = role === 'admin'
+        ? `${portalAddress.trim().toLowerCase().replace(/\.majo\.id$/, '')}.majo.id`
+        : portalAddress.trim();
+
       const newAccount: RegisteredAccount = {
         name: name.trim(),
         username: username.trim().toLowerCase(),
         email: email.trim().toLowerCase() || undefined,
         password,
         role,
-        portalAddress:
-          role === 'admin'
-            ? `${portalAddress.trim().toLowerCase().replace(/\.majo\.id$/, '')}.majo.id`
-            : portalAddress.trim(),
+        portalAddress: normalizedPortalAddress,
         location: role === 'user' ? selectedLocation : undefined,
         createdAt: new Date().toISOString(),
       };
+
+      if (role === 'admin') {
+        const principal = username.trim().toLowerCase();
+        setActivePortalAddress(normalizedPortalAddress, principal);
+        savePortalConfig(updatedPortalConfig, normalizedPortalAddress);
+      }
 
       if (isFirebaseConfigured) {
         await registerAccountWithFirebase(newAccount, password);

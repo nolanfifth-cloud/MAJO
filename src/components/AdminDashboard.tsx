@@ -22,6 +22,7 @@ interface AdminDashboardProps {
     name?: string;
     role?: string;
     location?: string;
+    portalAddress?: string;
   };
 }
 
@@ -175,7 +176,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedRegionFilter, setSelectedRegionFilter] = useState('Semua Region');
   const [isPortalConfigured, setIsPortalConfigured] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('majo_portal_configured') === 'true';
+      const config = getPortalConfig();
+      return Boolean(config.isActivated && (config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0)));
     } catch {
       return false;
     }
@@ -190,7 +192,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   });
   const [showWarningBanner, setShowWarningBanner] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('majo_portal_configured') !== 'true';
+      const config = getPortalConfig();
+      return !(config.isActivated && (config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0)));
     } catch {
       return true;
     }
@@ -199,16 +202,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Synchronize with localStorage (created jobs by admin & completed reports by user)
   useEffect(() => {
     try {
-      const portalConfigured = localStorage.getItem('majo_portal_configured') === 'true';
       const portalConfig = getPortalConfig();
       const hasLocation =
         portalConfig.masterWilayah.length > 0 ||
         portalConfig.masterGroups.some((group) => group.locations.length > 0);
+      const portalConfigured = Boolean(portalConfig.isActivated && hasLocation);
       setHasConfiguredLocation(hasLocation);
-      if (portalConfigured) {
-        setIsPortalConfigured(true);
-        setShowWarningBanner(!hasLocation);
-      }
+      setIsPortalConfigured(portalConfigured);
+      setShowWarningBanner(!portalConfigured);
 
       let baseList = [...INITIAL_PMS];
       const savedAdminJobs = localStorage.getItem('majo_admin_created_jobs');
@@ -739,14 +740,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onNavigateToDashboard={() => setActiveNav('dashboard')}
               onNavigateToCreateJobs={() => setActiveNav('create-jobs')}
               onConfigurationCompleted={() => {
-                setIsPortalConfigured(true);
-                setHasConfiguredLocation(true);
-                setShowWarningBanner(false);
-                try {
-                  localStorage.setItem('majo_portal_configured', 'true');
-                } catch {
-                  // Ignore
-                }
+                const config = getPortalConfig();
+                const hasLocation = config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0);
+                setIsPortalConfigured(Boolean(config.isActivated && hasLocation));
+                setHasConfiguredLocation(hasLocation);
+                setShowWarningBanner(!(config.isActivated && hasLocation));
               }}
             />
           ) : activeNav === 'pengaturan-profile' ? (
@@ -759,6 +757,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 username: currentUser?.username || '',
                 name: currentUser?.name || '',
                 role: currentUser?.role || 'admin',
+                portalAddress: currentUser?.portalAddress || getPortalConfig().portalAddress,
               }}
             />
           ) : (

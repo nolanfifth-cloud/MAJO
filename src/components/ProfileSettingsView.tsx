@@ -10,13 +10,14 @@ interface ProfileSettingsViewProps {
     name: string;
     role: string;
     email?: string;
+    portalAddress?: string;
   };
 }
 
 export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
   onNavigateToDashboard,
   onLogout,
-  currentUser = { username: '', name: '', role: 'admin' },
+  currentUser = { username: '', name: '', role: 'admin', portalAddress: '' },
 }) => {
   // Password Form States
   const [oldPassword, setOldPassword] = useState('');
@@ -455,9 +456,8 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
                       Portal Address ID
                     </span>
-                    <div className="flex items-center gap-1.5 text-sm font-bold text-slate-800 font-mono">
-                      <span className="text-blue-600">portal.majo.id/</span>
-                      <span>admin-center</span>
+                    <div className="flex items-center gap-1.5 text-sm font-bold text-slate-800 font-mono flex-wrap">
+                      <span className="text-blue-600">{currentUser.portalAddress ? currentUser.portalAddress.replace(/^https?:\/\//i, '') : 'Belum dibuat'}</span>
                     </div>
                   </div>
                 </div>
