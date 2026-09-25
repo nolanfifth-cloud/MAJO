@@ -150,18 +150,6 @@ export default function App() {
   const handleLogout = async () => {
     if (firebaseAuth) await signOut(firebaseAuth);
     localStorage.removeItem('majo_session');
-    try {
-      const session = localStorage.getItem('majo_session');
-      if (session) {
-        const parsed = JSON.parse(session) as { uid?: string; username?: string };
-        const identity = parsed.uid ? `uid_${parsed.uid}` : parsed.username ? `user_${parsed.username.toLowerCase()}` : '';
-        if (identity) {
-          localStorage.removeItem(`majo_active_portal_address_${identity}`);
-        }
-      }
-    } catch {
-      // Ignore legacy session parsing issues.
-    }
     localStorage.removeItem('majo_active_portal_address');
     setCurrentUser({ username: '', name: '', role: 'user', location: '', email: '', portalAddress: '', createdAt: '' });
     setCurrentView('login');

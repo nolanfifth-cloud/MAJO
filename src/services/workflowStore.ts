@@ -204,6 +204,12 @@ export function getActivePortalAddress(userKey?: string): string {
     if (identity) {
       const scoped = localStorage.getItem(`majo_active_portal_address_${identity}`);
       if (scoped) return normalizePortalAddress(scoped);
+
+      const session = localStorage.getItem('majo_session');
+      if (session) {
+        const parsed = JSON.parse(session) as { portalAddress?: string };
+        if (parsed.portalAddress) return normalizePortalAddress(parsed.portalAddress);
+      }
     }
 
     const storedActive = localStorage.getItem('majo_active_portal_address');

@@ -334,7 +334,12 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     };
 
     setJobsDatabase((prev) => {
-      const job = prev[currentJobId] || { id: currentJobId, title: `Daftar Jobs ${currentJobId}`, devices: [] };
+      const job = prev[currentJobId] || {
+        id: currentJobId,
+        sourceId: String(currentJobId),
+        title: `Daftar Jobs ${currentJobId}`,
+        devices: [],
+      };
       return {
         ...prev,
         [currentJobId]: {
