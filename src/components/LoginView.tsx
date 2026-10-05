@@ -117,14 +117,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 referrerPolicy="no-referrer"
               />
             </div>
-                <span>Autentikasi &amp; Hak Akses</span>
             <div>
               <div className="flex items-center gap-2">
-                Login dikelola Firebase Authentication dengan akses data berdasarkan peran dan portal.
+                <span className="text-xl font-bold tracking-tight text-on-surface">MAJO</span>
               </div>
-                          <span>Portal Operasional MAJO</span>
-                              Selamat datang kembali di MAJO Portal, <strong className="text-on-surface font-semibold">@{loginSuccessUser}</strong>. Kredensial Anda diverifikasi oleh Firebase Authentication.
-                                <span className="font-semibold text-emerald-600">Firebase Auth aktif</span>
               <p className="text-xs text-secondary font-medium">
                 <b>Halaman Login untuk Seluruh Admin dan User</b>
               </p>
