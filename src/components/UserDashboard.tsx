@@ -1,11 +1,14 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { AuthView, PmItem } from '../types';
+              <span>Akun Firebase terverifikasi</span>
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { AuthView, ConditionLogicRange, PmItem } from '../types';
 import { RiwayatSelesaiView } from './RiwayatSelesaiView';
 import { ProfilTeknisiView } from './ProfilTeknisiView';
 import { isCloudinaryConfigured, uploadPhotoToCloudinary } from '../services/cloudinary';
+import { parseLegacyAreaDetails, PM_TYPE_DEFINITIONS, PmTypeKey } from '../services/workflowStore';
 import {
-  loadAdminJobsFromFirestore,
-  loadJobsForLocationFromFirestore,
+  loadCompletedReportsFromFirestore,
+  loadJobProgressForUserFromFirestore,
+  loadJobsForUserFromFirestore,
   saveCompletedReportToFirestore,
   saveJobProgressToFirestore,
 } from '../services/firestoreStore';
@@ -17,8 +20,9 @@ import {
   Bell,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Layers,
-  Plus,
   Trash2,
   Camera,
   CheckCircle2,
@@ -36,10 +40,21 @@ import {
   KeyRound,
   FileCheck,
   ExternalLink,
+  Plus,
 } from 'lucide-react';
 
 interface DeviceItem {
   id: string;
+  subtaskId: string;
+  taskTitle: string;
+  pmType?: string;
+  hasPhoto: boolean;
+  hasCondition: boolean;
+  conditionMode?: 'options' | 'logic' | 'both';
+  conditionOptions: string[];
+  conditionLogic: ConditionLogicRange[];
+  hasTimestamp: boolean;
+  hasNotes: boolean;
   location: string;
   expanded: boolean;
   statusState: 'INITIAL' | 'DONE' | 'UPDATE';
@@ -47,8 +62,14 @@ interface DeviceItem {
     photo: string;
     photoName: string;
     status: string;
+    conditionSelection?: string;
+    conditionValue?: number;
+    logicOutput?: string;
     keterangan: string;
     durasi: string;
+    capturedAt: string;
+    latitude?: number;
+    longitude?: number;
   };
 }
 
@@ -59,9 +80,19 @@ interface JobTabItem {
   pmType?: string;
   dates?: string;
   regions?: string;
+  targetAreaDetails?: PmItem['targetAreaDetails'];
   devices: DeviceItem[];
 }
 
+interface UserProgressNotification {
+  id: string;
+  jobId: number;
+  title: string;
+  jobTitle: string;
+  area: string;
+  completedCount: number;
+  totalCount: number;
+}
 interface UserDashboardProps {
   onNavigate: (view: AuthView) => void;
   onLogout?: () => void;
@@ -94,6 +125,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   // Navigation & Sub-views state
   const [activeMenu, setActiveMenu] = useState<'dashboard' | 'riwayat' | 'profil'>('dashboard');
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+  const [showProgressNotificationMenu, setShowProgressNotificationMenu] = useState(false);
+  const progressNotificationRef = useRef<HTMLDivElement>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
@@ -102,6 +135,26 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   // Active Job Tab
   const [currentJobId, setCurrentJobId] = useState<number>(0);
+  const [activeSubtaskId, setActiveSubtaskId] = useState('');
+  const [currentJobsPage, setCurrentJobsPage] = useState(1);
+  const notificationStorageKey = `majo_user_read_progress_notifications_${currentUser.uid || currentUser.username || 'user'}`;
+  const [readProgressNotificationIds, setReadProgressNotificationIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem(notificationStorageKey);
+      const parsed = stored ? JSON.parse(stored) : [];
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(notificationStorageKey, JSON.stringify(readProgressNotificationIds));
+    } catch {
+      // Notification read state is optional when local storage is unavailable.
+    }
+  }, [notificationStorageKey, readProgressNotificationIds]);
 
   // Toast notification state
   const [toast, setToast] = useState<{ show: boolean; message: string; isSuccess: boolean }>({
@@ -109,6 +162,43 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     message: '',
     isSuccess: true,
   });
+  const toastRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!toast.show) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !toastRef.current?.contains(event.target)) {
+        setToast((previous) => ({ ...previous, show: false }));
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setToast((previous) => ({ ...previous, show: false }));
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [toast.show]);
+
+  useEffect(() => {
+    if (!showProgressNotificationMenu) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !progressNotificationRef.current?.contains(event.target)) {
+        setShowProgressNotificationMenu(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowProgressNotificationMenu(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showProgressNotificationMenu]);
 
   const triggerToast = (message: string, isSuccess = true) => {
     setToast({ show: true, message, isSuccess });
@@ -119,47 +209,147 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   // Jobs are loaded from real admin assignments; no demo records are seeded.
   const [jobsDatabase, setJobsDatabase] = useState<Record<number, JobTabItem>>({});
+  const [isJobsLoading, setIsJobsLoading] = useState(true);
+  const [submittedJobIds, setSubmittedJobIds] = useState<Set<string>>(new Set());
+  const hasAssignedJobs = Object.keys(jobsDatabase).length > 0;
 
   useEffect(() => {
     let cancelled = false;
-    const jobsLoader = currentUser.location
-      ? loadJobsForLocationFromFirestore(currentUser.location)
-      : loadAdminJobsFromFirestore();
-    jobsLoader.then((jobs) => {
-      if (cancelled || jobs.length === 0) return;
-      const assignedJobs = jobs.reduce<Record<number, JobTabItem>>((result, job: PmItem, index) => {
+    setIsJobsLoading(true);
+    const userUid = currentUser.uid || '';
+    Promise.all([
+      loadJobsForUserFromFirestore(),
+      userUid ? loadJobProgressForUserFromFirestore(userUid) : Promise.resolve([]),
+      userUid && currentUser.portalAddress
+        ? loadCompletedReportsFromFirestore(userUid, currentUser.portalAddress)
+        : Promise.resolve([]),
+    ]).then(([jobs, progressSnapshots, completedReports]) => {
+      if (cancelled) return;
+      const submittedIds = new Set(completedReports.map((report) => String(report.jobId || '')).filter(Boolean));
+      try {
+        const localReports = JSON.parse(localStorage.getItem('majo_completed_reports') || '[]') as Record<string, unknown>[];
+        localReports
+          .filter((report) => String(report.submittedBy || '') === userUid)
+          .forEach((report) => {
+            const jobId = String(report.jobId || '');
+            if (jobId) submittedIds.add(jobId);
+          });
+      } catch {
+        // Ignore invalid local report cache.
+      }
+      setSubmittedJobIds(submittedIds);
+      const progressByJobId = new Map(
+        progressSnapshots.map((snapshot) => [String(snapshot.jobId || ''), snapshot])
+      );
+      const availableJobs = jobs.filter((job) => !submittedIds.has(job.id));
+      const assignedJobs = availableJobs.reduce<Record<number, JobTabItem>>((result, job: PmItem, index) => {
+        const savedProgress = progressByJobId.get(job.id);
+        const savedDevices = Array.isArray(savedProgress?.devices)
+          ? savedProgress.devices as Record<string, unknown>[]
+          : [];
+        const savedDevicesById = new Map(savedDevices.map((device) => [String(device.id || ''), device]));
+        const hasSavedDeviceSnapshot = Array.isArray(savedProgress?.devices);
+        const configuredDevices: DeviceItem[] = (job.modules || []).flatMap((module, moduleIndex): DeviceItem[] => {
+          const subtaskId = `${job.id}_subtask_${moduleIndex + 1}`;
+          const checklistItems = module.checklist?.length
+            ? module.checklist
+            : Array.from({ length: Math.max(1, module.itemCount || 1) }, () => null);
+          return checklistItems.map((checklist, itemIndex) => {
+            const taskTitle = checklist?.text || module.name;
+            const pmType = checklist?.pmType || module.pmType;
+            const conditionOptions = checklist?.conditionOptions?.length
+              ? checklist.conditionOptions
+              : checklist?.conditionText
+                ? checklist.conditionText.replace(/^Kondisi:\s*/i, '').split('/').map((option) => option.trim()).filter(Boolean)
+                : [];
+            const id = `${subtaskId}_point_${itemIndex + 1}`;
+            const savedDevice = savedDevicesById.get(id);
+            const savedFormData = savedDevice?.formData && typeof savedDevice.formData === 'object'
+              ? savedDevice.formData as Partial<DeviceItem['formData']>
+              : {};
+            return {
+              id,
+              subtaskId,
+              taskTitle,
+              pmType,
+              hasPhoto: checklist?.hasPhoto ?? true,
+              hasCondition: checklist?.hasCondition ?? true,
+              conditionMode: checklist?.conditionMode || 'options',
+              conditionOptions,
+              conditionLogic: checklist?.conditionLogic || [],
+              hasTimestamp: checklist?.hasTimestamp ?? false,
+              hasNotes: checklist?.hasNotes ?? Boolean(checklist?.notesText),
+              location: currentUser.location || job.targetWilayahList?.[0] || job.regions,
+              expanded: savedDevice
+                ? savedDevice.expanded === true
+                : moduleIndex === 0 && itemIndex === 0,
+              statusState: savedDevice?.statusState === 'DONE' || savedDevice?.statusState === 'UPDATE'
+                ? savedDevice.statusState as DeviceItem['statusState']
+                : 'INITIAL',
+              formData: {
+                photo: '',
+                photoName: '',
+                status: '',
+                keterangan: '',
+                durasi: '',
+                capturedAt: '',
+                ...savedFormData,
+              },
+            };
+          });
+        });
+        const configuredDeviceIds = new Set(configuredDevices.map((device) => device.id));
+        const subtaskTemplates = new Map(configuredDevices.map((device) => [device.subtaskId, device]));
+        const restoredAddedDevices: DeviceItem[] = savedDevices.flatMap((snapshot): DeviceItem[] => {
+          const id = String(snapshot.id || '');
+          const subtaskId = String(snapshot.subtaskId || '');
+          const template = subtaskTemplates.get(subtaskId);
+          if (!id || configuredDeviceIds.has(id) || !template) return [];
+          const savedFormData = snapshot.formData && typeof snapshot.formData === 'object'
+            ? snapshot.formData as Partial<DeviceItem['formData']>
+            : {};
+          return [{
+            ...template,
+            id,
+            taskTitle: typeof snapshot.taskTitle === 'string' ? snapshot.taskTitle : template.taskTitle,
+            location: typeof snapshot.location === 'string' ? snapshot.location : '',
+            expanded: snapshot.expanded === true,
+            statusState: snapshot.statusState === 'DONE' || snapshot.statusState === 'UPDATE'
+              ? snapshot.statusState as DeviceItem['statusState']
+              : 'INITIAL',
+            formData: { ...template.formData, ...savedFormData },
+          }];
+        });
+        const activeDevices = hasSavedDeviceSnapshot
+          ? configuredDevices.filter((device) => savedDevicesById.has(device.id))
+          : configuredDevices;
         result[index + 1] = {
           id: index + 1,
           sourceId: job.id,
           title: job.title,
-          pmType: job.modules?.[0]?.pmType || job.modules?.[0]?.name,
+          pmType: job.modules?.[0]?.checklist?.[0]?.pmType || job.modules?.[0]?.pmType,
           dates: job.dates,
           regions: job.regions,
-          devices: (job.modules || []).map((module, moduleIndex) => ({
-            id: `${job.id}_${moduleIndex + 1}`,
-            location: job.targetWilayahList?.[0] || job.regions,
-            expanded: moduleIndex === 0,
-            statusState: 'INITIAL',
-            formData: {
-              photo: '',
-              photoName: '',
-              status: '',
-              keterangan: '',
-              durasi: '',
-            },
-          })),
+          targetAreaDetails: job.targetAreaDetails,
+          devices: [...activeDevices, ...restoredAddedDevices],
         };
         return result;
       }, {});
       setJobsDatabase(assignedJobs);
-      setCurrentJobId(1);
-    }).catch(() => {
-      // No cloud assignments are available yet.
+      setCurrentJobId(assignedJobs[1] ? 1 : 0);
+      setActiveSubtaskId(assignedJobs[1]?.devices[0]?.subtaskId || '');
+      setCurrentJobsPage(1);
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Periksa koneksi dan aturan akses Firebase.';
+      triggerToast(`Gagal memuat penugasan dari Firebase: ${message}`, false);
+      if (!cancelled) setJobsDatabase({});
+    }).finally(() => {
+      if (!cancelled) setIsJobsLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentUser.uid, currentUser.location, currentUser.portalAddress]);
 
   useEffect(() => {
     const activeJob = jobsDatabase[currentJobId];
@@ -169,26 +359,27 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       currentUser.uid,
       currentUser.location || '',
       activeJob.devices,
+      currentUser.portalAddress || '',
       {
         progress: activeJob.devices.length
           ? Math.round((activeJob.devices.filter((device) => device.statusState === 'DONE').length / activeJob.devices.length) * 100)
           : 0,
         doneCount: activeJob.devices.filter((device) => device.statusState === 'DONE').length,
         totalCount: activeJob.devices.length,
-      }
+      },
+      currentUser.name || currentUser.username
     ).catch(() => {
       // Local state remains available when the cloud is unreachable.
     });
   }, [jobsDatabase, currentJobId, currentUser.uid, currentUser.location]);
 
   // Submission & Confirmation modal states
-  const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
 
-  // Compute all devices across all jobs
+  // Progress and completion are scoped to the selected main job.
   const allDevices = useMemo(() => {
-    return (Object.values(jobsDatabase) as JobTabItem[]).flatMap((j) => j.devices);
-  }, [jobsDatabase]);
+    return jobsDatabase[currentJobId]?.devices || [];
+  }, [jobsDatabase, currentJobId]);
 
   // Compute completed devices (DONE or in UPDATE mode during edit - keeps progress level unchanged!)
   const completedDevicesCount = useMemo(() => {
@@ -202,8 +393,39 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       : 0;
   const isFullyCompleted = progressPercentage === 100 && totalDevicesCount > 0;
 
+  const normalizeConditionText = (value: string) => value.toLowerCase().replace(/[_\s]+/g, ' ').trim();
+
+  const isAbnormalConditionLabel = (label: string, pmType?: string) => {
+    const normalizedLabel = normalizeConditionText(label);
+    const definition = pmType && pmType in PM_TYPE_DEFINITIONS
+      ? PM_TYPE_DEFINITIONS[pmType as PmTypeKey]
+      : undefined;
+    const configuredBadCondition = definition?.badConditions.some(
+      (condition) => normalizeConditionText(condition) === normalizedLabel
+    );
+    const knownBadTerms = ['rusak', 'kotor', 'error', 'kadaluarsa', 'berantakan', 'perlu penataan'];
+    const negativePhrase = /tidak\s+(bisa|dapat|layak|normal|baik|berfungsi|aktif|digunakan|dipakai|beroperasi|tersedia)/.test(normalizedLabel);
+    return Boolean(configuredBadCondition)
+      || knownBadTerms.some((condition) => normalizedLabel.includes(condition))
+      || negativePhrase;
+  };
+
   // Options helper for the 9 PM types
-  const getConditionOptions = (pmType?: string) => {
+  const getConditionOptions = (pmType?: string, configuredOptions: string[] = []) => {
+    if (configuredOptions.length > 0) {
+      return configuredOptions.map((label, index) => {
+        const value = label.trim().toLowerCase().replace(/\s+/g, '_');
+        const normalizedLabel = normalizeConditionText(label);
+        const isBad = isAbnormalConditionLabel(label, pmType);
+        const isWarning = normalizedLabel.includes('kadaluarsa') || normalizedLabel.includes('perlu penataan');
+        return {
+          value,
+          label,
+          color: isBad ? (isWarning ? 'amber' : 'rose') : index === 0 ? 'emerald' : 'blue',
+        };
+      });
+    }
+
     switch (pmType) {
       case 'pembersihan':
         return [
@@ -240,17 +462,34 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   };
 
-  // Submit complete 100% report to Admin and archive into Riwayat Selesai
-  const handleConfirmSubmitReport = () => {
-    setIsSubmitted(true);
-    setShowSubmitModal(false);
+  const isAbnormalStatus = (device: DeviceItem) => {
+    const statuses = [device.formData.status, device.formData.conditionSelection, device.formData.logicOutput]
+      .filter(Boolean)
+      .map((status) => status!);
+    return statuses.some((status) => isAbnormalConditionLabel(status, device.pmType));
+  };
+
+  const hasRequiredConditionResponse = (device: DeviceItem) => {
+    const requiresOptions = device.conditionMode === 'options' || device.conditionMode === 'both' || !device.conditionMode;
+    const requiresLogic = device.conditionMode === 'logic' || device.conditionMode === 'both';
+    const hasOption = Boolean(device.formData.conditionSelection || device.formData.status);
+    const hasLogicOutput = Boolean(device.formData.conditionValue !== undefined
+      && (device.formData.logicOutput || (device.conditionMode === 'logic' && device.formData.status)));
+    return (!requiresOptions || hasOption) && (!requiresLogic || hasLogicOutput);
+  };
+
+  // Submit and archive only this user's selected main job.
+  const handleConfirmSubmitReport = async () => {
+    const jobToSubmit = jobsDatabase[currentJobId];
+    if (!jobToSubmit?.sourceId || !currentUser.uid || !currentUser.portalAddress) return;
 
     const submittedReport = {
       id: `PM-${new Date().getFullYear()}-${Date.now()}`,
-      jobId: activeJob.sourceId,
-      submittedBy: currentUser?.uid || '',
+      jobId: jobToSubmit.sourceId,
+      submittedBy: currentUser.uid,
+      portalId: currentUser.portalAddress,
       year: new Date().getFullYear(),
-      title: activeJob.title,
+      title: jobToSubmit.title,
       completedAt:
         new Date().toLocaleDateString('id-ID', {
           day: '2-digit',
@@ -259,35 +498,67 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         }) +
         `, ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB`,
       period: new Date().toLocaleDateString('id-ID'),
-      region: currentUser?.location || '',
-      subJobsCount: Object.keys(jobsDatabase).length,
-      pointsCount: allDevices.length,
-      subJobs: (Object.values(jobsDatabase) as JobTabItem[]).flatMap((job, idx) =>
-        job.devices.map((d, dIdx) => ({
-          name: job.title,
-          tag: String.fromCharCode(65 + idx) + (dIdx + 1),
-          device: d.location || 'Perangkat Standar',
-          duration: `${d.formData.durasi || '30'} Menit`,
-          file: d.formData.photoName || 'foto_inspeksi.jpg',
-          time:
-            new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) +
-            ' (GPS Valid)',
-          desc: d.formData.keterangan || 'Kondisi telah diperiksa normal sesuai standar operasional.',
-        }))
-      ),
+      region: currentUser.location || '',
+      subJobsCount: new Set(jobToSubmit.devices.map((device) => device.subtaskId)).size,
+      pointsCount: jobToSubmit.devices.length,
+      subJobs: jobToSubmit.devices.map((device, index) => ({
+        name: device.taskTitle || jobToSubmit.title,
+        tag: `${device.subtaskId}-${index + 1}`,
+        device: device.location || 'Perangkat Standar',
+        duration: `${device.formData.durasi || '30'} Menit`,
+        file: device.formData.photoName || 'foto_inspeksi.jpg',
+        time: device.formData.capturedAt || '',
+        latitude: device.formData.latitude,
+        longitude: device.formData.longitude,
+        conditionValue: device.formData.conditionValue,
+        conditionSelection: device.formData.conditionSelection,
+        logicOutput: device.formData.logicOutput,
+        status: [
+          device.conditionMode === 'logic'
+            ? device.formData.logicOutput || device.formData.status
+            : device.formData.conditionSelection || device.formData.status,
+          device.formData.logicOutput,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        desc: device.formData.keterangan || 'Kondisi telah diperiksa normal sesuai standar operasional.',
+      })),
     };
+
+    try {
+      await saveCompletedReportToFirestore(
+        submittedReport as Record<string, unknown>,
+        currentUser.uid,
+        currentUser.portalAddress
+      );
+    } catch (error) {
+      triggerToast(
+        error instanceof Error ? `Laporan gagal disimpan: ${error.message}` : 'Laporan gagal disimpan ke server.',
+        false
+      );
+      return;
+    }
 
     try {
       const existing = localStorage.getItem('majo_completed_reports');
       const list = existing ? JSON.parse(existing) : [];
       localStorage.setItem('majo_completed_reports', JSON.stringify([submittedReport, ...list]));
-      void saveCompletedReportToFirestore(submittedReport as Record<string, unknown>, currentUser?.uid).catch(() => {
-        // localStorage remains the fallback when cloud persistence fails.
-      });
     } catch {
-      // fallback
+      // Firestore is authoritative; local completed history is an optional cache.
     }
 
+    setSubmittedJobIds((previous) => new Set(previous).add(jobToSubmit.sourceId));
+    const remainingJobs = (Object.values(jobsDatabase) as JobTabItem[])
+      .filter((job) => job.sourceId !== jobToSubmit.sourceId);
+    const reindexedJobs = remainingJobs.reduce<Record<number, JobTabItem>>((result, job, index) => {
+      result[index + 1] = { ...job, id: index + 1 };
+      return result;
+    }, {});
+    setJobsDatabase(reindexedJobs);
+    setCurrentJobId(reindexedJobs[1]?.id || 0);
+    setActiveSubtaskId(reindexedJobs[1]?.devices[0]?.subtaskId || '');
+    setCurrentJobsPage(1);
+    setShowSubmitModal(false);
     triggerToast('Laporan PM 100% Lengkap berhasil diserahkan ke Admin Wilayah!', true);
   };
 
@@ -299,6 +570,70 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     dates: '',
     regions: '',
     devices: [],
+  };
+  const isSubmitted = submittedJobIds.has(activeJob.sourceId);
+  const activeSubtask = activeJob.devices.find((device) => device.subtaskId === activeSubtaskId)
+    || activeJob.devices[0];
+  const subtaskGroups = Array.from(
+    new Map(activeJob.devices.map((device) => [device.subtaskId, device])).values()
+  );
+  const activeSubtaskDevices = activeSubtask
+    ? activeJob.devices.filter((device) => device.subtaskId === activeSubtask.subtaskId)
+    : [];
+  const allAssignedJobs = Object.values(jobsDatabase) as JobTabItem[];
+  const jobsPerPage = 5;
+  const totalJobsPages = Math.max(1, Math.ceil(allAssignedJobs.length / jobsPerPage));
+  const currentPageJobs = allAssignedJobs.slice((currentJobsPage - 1) * jobsPerPage, currentJobsPage * jobsPerPage);
+  const visibleJobs = [
+    ...currentPageJobs.filter((job) => job.id !== currentJobId),
+    ...currentPageJobs.filter((job) => job.id === currentJobId),
+  ];
+
+  const progressNotifications = useMemo<UserProgressNotification[]>(() => allAssignedJobs.map((job) => {
+    const totalCount = job.devices.length;
+    const completedCount = job.devices.filter((device) => device.statusState === 'DONE').length;
+    return {
+      id: `${job.sourceId}_${completedCount}_${totalCount}`,
+      jobId: job.id,
+      title: totalCount > 0 && completedCount === totalCount
+        ? 'Checklist selesai, siap dikirim'
+        : completedCount > 0
+          ? 'Progress PM diperbarui'
+          : 'Penugasan siap dikerjakan',
+      jobTitle: job.title,
+      area: job.regions || currentUser.location || 'Lokasi belum ditentukan',
+      completedCount,
+      totalCount,
+    };
+  }), [allAssignedJobs, currentUser.location]);
+  const unreadProgressNotificationCount = progressNotifications.filter(
+    (notification) => !readProgressNotificationIds.includes(notification.id)
+  ).length;
+
+  const markAllProgressNotificationsRead = () => {
+    setReadProgressNotificationIds(progressNotifications.map((notification) => notification.id));
+  };
+
+  const openProgressNotification = (notification: UserProgressNotification) => {
+    setReadProgressNotificationIds((previous) => previous.includes(notification.id)
+      ? previous
+      : [...previous, notification.id]);
+    setActiveMenu('dashboard');
+    setCurrentJobId(notification.jobId);
+    setActiveSubtaskId(jobsDatabase[notification.jobId]?.devices[0]?.subtaskId || '');
+    setIsTaskCardExpanded(true);
+    setShowProgressNotificationMenu(false);
+  };
+
+  const goToJobsPage = (page: number) => {
+    const nextPage = Math.max(1, Math.min(totalJobsPages, page));
+    setCurrentJobsPage(nextPage);
+    const firstJob = allAssignedJobs.slice((nextPage - 1) * jobsPerPage, nextPage * jobsPerPage)[0];
+    if (firstJob) {
+      setCurrentJobId(firstJob.id);
+      setActiveSubtaskId(firstJob.devices[0]?.subtaskId || '');
+    }
+    setIsTaskCardExpanded(true);
   };
 
   // Toggle Device Accordion
@@ -316,39 +651,36 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     });
   };
 
-  // Add new device row
-  const addNewDevice = () => {
-    const newId = `dev_${currentJobId}_${Date.now()}`;
-    const newDev: DeviceItem = {
-      id: newId,
+  const addDeviceToActiveSubtask = () => {
+    if (!activeSubtask) return;
+    const template = activeSubtaskDevices[0];
+    if (!template) return;
+    const newDevice: DeviceItem = {
+      ...template,
+      id: `${activeSubtask.subtaskId}_point_${crypto.randomUUID()}`,
       location: '',
       expanded: true,
       statusState: 'INITIAL',
       formData: {
         photo: '',
         photoName: '',
-        status: 'normal',
+        status: '',
+        conditionSelection: '',
+        conditionValue: undefined,
+        logicOutput: '',
         keterangan: '',
         durasi: '',
+        capturedAt: '',
       },
     };
-
-    setJobsDatabase((prev) => {
-      const job = prev[currentJobId] || {
-        id: currentJobId,
-        sourceId: String(currentJobId),
-        title: `Daftar Jobs ${currentJobId}`,
-        devices: [],
-      };
+    setJobsDatabase((previous) => {
+      const job = previous[currentJobId];
+      if (!job) return previous;
       return {
-        ...prev,
-        [currentJobId]: {
-          ...job,
-          devices: [...job.devices, newDev],
-        },
+        ...previous,
+        [currentJobId]: { ...job, devices: [...job.devices, newDevice] },
       };
     });
-    triggerToast('Baris perangkat baru ditambahkan!');
   };
 
   // Prompt delete device
@@ -359,6 +691,15 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   // Confirm delete device
   const confirmDeleteDevice = () => {
     if (!deleteTargetId) return;
+    const targetDevice = activeJob.devices.find((device) => device.id === deleteTargetId);
+    const pointsInSubtask = targetDevice
+      ? activeJob.devices.filter((device) => device.subtaskId === targetDevice.subtaskId)
+      : [];
+    if (pointsInSubtask.length <= 1) {
+      setDeleteTargetId(null);
+      triggerToast('Setiap sub-tugas harus memiliki minimal satu titik perangkat.', false);
+      return;
+    }
     setJobsDatabase((prev) => {
       const job = prev[currentJobId];
       if (!job) return prev;
@@ -375,21 +716,31 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   };
 
   // Handle device action button cycle (INITIAL -> DONE -> UPDATE -> DONE)
-  const handleActionClick = (deviceId: string) => {
+  const handleActionClick = async (deviceId: string) => {
     const device = activeJob.devices.find((d) => d.id === deviceId);
     if (!device) return;
 
-    const isNegative = ['rusak', 'kotor', 'kadaluarsa', 'error', 'berantakan', 'perlu_penataan'].includes(
-      device.formData.status.toLowerCase()
-    );
+    const isNegative = isAbnormalStatus(device);
 
     if (device.statusState === 'INITIAL') {
       if (!device.location.trim()) {
         triggerToast('Mohon ketik Lokasi Perangkat terlebih dahulu!', false);
         return;
       }
-      if (!device.formData.status) {
-        triggerToast('Mohon pilih Status / Kondisi perangkat terlebih dahulu!', false);
+      if (device.hasCondition && !hasRequiredConditionResponse(device)) {
+        triggerToast(device.conditionMode === 'both'
+          ? 'Lengkapi Pilihan Kondisi dan nilai Logic Kondisi terlebih dahulu.'
+          : device.conditionMode === 'logic'
+            ? 'Masukkan nilai yang berada dalam Rentang Logic Kondisi.'
+            : 'Mohon pilih Status / Kondisi perangkat terlebih dahulu!', false);
+        return;
+      }
+      if (device.hasPhoto && !device.formData.photo) {
+        triggerToast(`Foto bukti untuk "${device.taskTitle}" wajib diunggah.`, false);
+        return;
+      }
+      if (device.hasNotes && !device.formData.keterangan.trim()) {
+        triggerToast(`Keterangan untuk "${device.taskTitle}" wajib diisi.`, false);
         return;
       }
       if (isNegative && !device.formData.keterangan.trim()) {
@@ -402,21 +753,61 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       }
 
       // Transition to DONE - locks device and updates progress
-      updateDevice(deviceId, { statusState: 'DONE' });
+      const responseMetadata = await captureResponseMetadata(device);
+      updateDevice(deviceId, {
+        statusState: 'DONE',
+        formData: { ...device.formData, ...responseMetadata },
+      });
       triggerToast(`Pemeriksaan ${device.location || 'Perangkat'} disimpan (Done)!`, true);
     } else if (device.statusState === 'DONE') {
       // Transition to UPDATE - unlocks device for editing, while progress percentage stays unchanged!
       updateDevice(deviceId, { statusState: 'UPDATE' });
       triggerToast('Mode edit aktif. Perbaiki data lalu klik tombol Update.', true);
     } else if (device.statusState === 'UPDATE') {
+      if (device.hasCondition && !hasRequiredConditionResponse(device)) {
+        triggerToast(device.conditionMode === 'both'
+          ? 'Lengkapi Pilihan Kondisi dan nilai Logic Kondisi terlebih dahulu.'
+          : device.conditionMode === 'logic'
+            ? 'Masukkan nilai yang berada dalam Rentang Logic Kondisi.'
+            : 'Mohon pilih Status / Kondisi perangkat terlebih dahulu!', false);
+        return;
+      }
+      if (device.hasPhoto && !device.formData.photo) {
+        triggerToast(`Foto bukti untuk "${device.taskTitle}" wajib diunggah.`, false);
+        return;
+      }
+      if (device.hasNotes && !device.formData.keterangan.trim()) {
+        triggerToast(`Keterangan untuk "${device.taskTitle}" wajib diisi.`, false);
+        return;
+      }
       if (isNegative && !device.formData.keterangan.trim()) {
         triggerToast('Kondisi perangkat ini memerlukan kolom Keterangan detail penanganan!', false);
         return;
       }
       // Save update - re-locks device and transitions back to DONE (button displays EDIT)
-      updateDevice(deviceId, { statusState: 'DONE' });
+      const responseMetadata = await captureResponseMetadata(device);
+      updateDevice(deviceId, {
+        statusState: 'DONE',
+        formData: { ...device.formData, ...responseMetadata },
+      });
       triggerToast('Data laporan berhasil diperbarui (Update sukses)!', true);
     }
+  };
+
+  const captureResponseMetadata = async (device: DeviceItem) => {
+    const capturedAt = new Date().toISOString();
+    if (!device.hasTimestamp || !navigator.geolocation) return { capturedAt: device.hasTimestamp ? capturedAt : '' };
+    return new Promise<{ capturedAt: string; latitude?: number; longitude?: number }>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve({
+          capturedAt,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        }),
+        () => resolve({ capturedAt }),
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      );
+    });
   };
 
   // Update specific device property helper
@@ -453,28 +844,20 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const handlePhotoUpload = async (deviceId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (isCloudinaryConfigured) {
-        try {
-          const photoUrl = await uploadPhotoToCloudinary(file);
-          updateDeviceForm(deviceId, { photo: photoUrl, photoName: file.name });
-          triggerToast('Foto berhasil disimpan ke Cloudinary!');
-        } catch (error) {
-          triggerToast(error instanceof Error ? error.message : 'Upload foto gagal.', false);
-        }
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        updateDeviceForm(deviceId, {
-          photo: uploadEvent.target?.result as string,
-          photoName: file.name,
-        });
-        triggerToast('Foto lampiran berhasil diunggah!');
-      };
-      reader.readAsDataURL(file);
-      triggerToast('Foto lampiran tersimpan sementara di browser.');
+    if (!file) return;
+    if (!isCloudinaryConfigured) {
+      triggerToast('Upload foto belum tersedia. Admin perlu mengonfigurasi Cloudinary.', false);
+      e.target.value = '';
+      return;
+    }
+    try {
+      const photoUrl = await uploadPhotoToCloudinary(file);
+      updateDeviceForm(deviceId, { photo: photoUrl, photoName: file.name });
+      triggerToast('Foto berhasil disimpan ke Cloudinary!');
+    } catch (error) {
+      triggerToast(error instanceof Error ? error.message : 'Upload foto gagal.', false);
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -487,7 +870,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="text-slate-800 antialiased min-h-screen flex flex-col bg-[#faf9fb] font-sans">
       {/* Toast Notification */}
       {toast.show && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-md bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-3 text-xs animate-in slide-in-from-bottom-4">
+        <div ref={toastRef} className="fixed bottom-6 right-6 z-50 max-w-md bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-3 text-xs animate-in slide-in-from-bottom-4">
           <div
             className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
               toast.isSuccess ? 'text-emerald-400' : 'text-rose-400'
@@ -510,7 +893,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               <img
                 alt="MAJO Logo"
                 className="w-full h-full object-contain"
-                src="/assets/logo%20MAJO.png"
+                src="/assets/Logo%20MAJO.png"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src =
                     'https://lh3.googleusercontent.com/aida/AEtjO1UqoYl0lso8Lfc9d6sgwWr4n3xq8viIowOombtBvfCqwYHo4zjlkbyOkjx4SXPjRz6x-HvH-TAWx7YXFo5p0aoE9Y_oMLE8dk4Mxsx8ceh7WLK8jVFWQOl76wEmSc_jxosbBXkDDrEU8rXTFfG6zamQgfrA9_7q5LL3eLC8fAOYBMOEH5uDDyxDKLctrODYAXetDlOfIMXFXQVBNL5mzfQ1mpKBYH6I5b-Dd20QrOpX6oalDSsOmWYmygz2WL2myDCzCjDLTdttKpA';
@@ -548,18 +931,80 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           ) : (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Encrypted Node • Synced</span>
+              <span>Akun Firebase terverifikasi</span>
             </div>
           )}
 
-          <button
-            onClick={() => triggerToast('Tidak ada notifikasi baru.')}
-            className="w-9 h-9 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 flex items-center justify-center text-xs transition-colors cursor-pointer"
-            type="button"
-            title="Notifikasi"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
+          <div className="relative" ref={progressNotificationRef}>
+            <button
+              aria-label={`Notifikasi progress PM${unreadProgressNotificationCount > 0 ? `, ${unreadProgressNotificationCount} belum dibaca` : ''}`}
+              aria-expanded={showProgressNotificationMenu}
+              onClick={() => setShowProgressNotificationMenu((open) => !open)}
+              className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50"
+              type="button"
+              title="Notifikasi progress PM"
+            >
+              <Bell className="w-4 h-4" />
+              {unreadProgressNotificationCount > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+                  {unreadProgressNotificationCount > 99 ? '99+' : unreadProgressNotificationCount}
+                </span>
+              )}
+            </button>
+            {showProgressNotificationMenu && (
+              <div className="absolute right-0 top-full z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 p-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">Progress PM</p>
+                    <p className="text-[11px] text-slate-500">Status checklist pekerjaan Anda</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={markAllProgressNotificationsRead}
+                    disabled={unreadProgressNotificationCount === 0}
+                    className="shrink-0 text-[11px] font-semibold text-blue-700 hover:underline disabled:cursor-default disabled:text-slate-400 disabled:no-underline"
+                  >
+                    Tandai dibaca
+                  </button>
+                </div>
+                <div className="max-h-[min(28rem,65vh)] overflow-y-auto p-2">
+                  {progressNotifications.length > 0 ? (
+                    <div className="space-y-1">
+                      {progressNotifications.map((notification) => {
+                        const isUnread = !readProgressNotificationIds.includes(notification.id);
+                        const progress = notification.totalCount
+                          ? Math.round((notification.completedCount / notification.totalCount) * 100)
+                          : 0;
+                        return (
+                          <button
+                            key={notification.id}
+                            type="button"
+                            onClick={() => openProgressNotification(notification)}
+                            className={`w-full rounded-lg p-3 text-left transition-colors hover:bg-slate-50 ${isUnread ? 'bg-blue-50/70' : 'bg-transparent'}`}
+                          >
+                            <span className="flex items-start gap-2.5">
+                              <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${isUnread ? 'bg-blue-600' : 'bg-transparent'}`} />
+                              <span className="material-symbols-outlined text-[18px] text-blue-700">assignment</span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-xs font-semibold text-slate-900">{notification.title}</span>
+                                <span className="mt-1 block truncate text-[11px] text-slate-600">{notification.jobTitle} · {notification.area}</span>
+                                <span className="mt-1 block text-[10px] text-slate-500">Checklist {notification.completedCount}/{notification.totalCount} · {progress}%</span>
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-6 text-center">
+                      <Bell className="mx-auto h-6 w-6 text-slate-400" />
+                      <p className="mt-2 text-xs font-semibold text-slate-500">Belum ada progress PM.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* User Profile Trigger with Click Menu */}
           <div className="relative">
@@ -731,91 +1176,128 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                   </p>
                 </div>
 
-                {/* Kartu Jobs dari Admin (Expand / Collapse) */}
-                <div
-                  onClick={() => setIsTaskCardExpanded(!isTaskCardExpanded)}
-                  className="bg-white border border-slate-200 hover:border-slate-300 rounded-2xl p-5 shadow-xs transition-all cursor-pointer relative group"
-                >
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-800 text-xs font-bold uppercase tracking-wider">
-                          Tugas Aktif Admin
-                        </span>
-                        <span className="text-xs font-semibold text-slate-400">
-                          ID: {jobsDatabase[currentJobId]?.id || 'Belum tersedia'}
-                        </span>
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-semibold">
-                          <Clock className="w-3 h-3 text-amber-600" /> Tenggat mengikuti penugasan admin
-                        </span>
-                      </div>
-                      <h2 className="text-lg md:text-xl font-extrabold text-slate-900 group-hover:text-slate-800 transition-colors">
-                        {activeJob.title}
-                      </h2>
-                      <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-600">
-                        <div className="flex items-center gap-1.5 font-medium">
-                          <CalendarCheck className="w-3.5 h-3.5 text-slate-400" />
-                          <span>
-                            Rentang Waktu: <strong className="text-slate-800 font-semibold">{activeJob.dates || 'Belum ditentukan'}</strong>
-                          </span>
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
-                            (Dengan Batas Waktu)
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                          <span>
-                            Wilayah Tugas: <strong>{activeJob.regions || currentUser.location || 'Belum ditentukan'}</strong>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Bagian Kanan Header PM: Progress bar + Tombol Segitiga / Chevron Toggle */}
-                    <div className="flex items-center justify-between lg:justify-end gap-6 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100">
-                      <div className="text-right">
-                        <div className="flex items-baseline justify-end gap-1.5">
-                          <span className="text-2xl md:text-3xl font-black text-slate-900">{progressPercentage}%</span>
-                          <span className="text-xs text-slate-500 font-semibold">Selesai</span>
-                        </div>
-                        <div className="w-36 md:w-44 h-2 bg-slate-100 rounded-full overflow-hidden mt-1.5 border border-slate-200">
-                          <div
-                            className="h-full bg-slate-900 rounded-full transition-all duration-300"
-                            style={{ width: `${progressPercentage}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-[10px] text-slate-400 block mt-1">
-                          {isTaskCardExpanded ? 'Klik untuk melipat detail jobs' : 'Klik untuk membuka detail jobs'}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsTaskCardExpanded(!isTaskCardExpanded);
-                        }}
-                        className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-900 hover:text-white text-slate-700 flex items-center justify-center transition-all shadow-xs shrink-0 cursor-pointer"
-                        title={isTaskCardExpanded ? 'Tutup Daftar Pemeriksaan' : 'Buka Daftar Pemeriksaan'}
-                      >
-                        {isTaskCardExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                      </button>
-                    </div>
+                {isJobsLoading ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Memuat penugasan admin...</div>
+                ) : hasAssignedJobs ? (
+                  <div className="space-y-3">
+                    {visibleJobs.map((job) => {
+                      const isActive = job.id === currentJobId;
+                      const completed = job.devices.filter((device) => device.statusState === 'DONE').length;
+                      const percentage = job.devices.length ? Math.round((completed / job.devices.length) * 100) : 0;
+                      const displayAreas = job.targetAreaDetails?.length
+                        ? job.targetAreaDetails
+                        : parseLegacyAreaDetails(job.regions);
+                      return (
+                        <button
+                          key={job.sourceId}
+                          type="button"
+                          onClick={() => {
+                            if (isActive) {
+                              setIsTaskCardExpanded((expanded) => !expanded);
+                            } else {
+                              setCurrentJobId(job.id);
+                              setActiveSubtaskId(job.devices[0]?.subtaskId || '');
+                              setIsTaskCardExpanded(true);
+                            }
+                          }}
+                          className={`w-full rounded-2xl border bg-white p-5 text-left shadow-xs transition-all cursor-pointer ${
+                            isActive ? 'border-slate-900 ring-1 ring-slate-900/10' : 'border-slate-200 hover:border-slate-400'
+                          }`}
+                        >
+                          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`rounded-md px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider ${isActive ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                                  {isActive ? 'Job Dipilih' : 'Tugas Admin'}
+                                </span>
+                                <span className="text-xs font-semibold text-slate-400">ID: {job.sourceId}</span>
+                                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                                  <Clock className="h-3 w-3" /> Tenggat mengikuti penugasan admin
+                                </span>
+                              </div>
+                              <h2 className="text-lg font-extrabold text-slate-900 md:text-xl">{job.title}</h2>
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <CalendarCheck className="h-3.5 w-3.5 text-slate-400" /> Rentang Waktu: <strong>{job.dates || 'Belum ditentukan'}</strong>
+                                </span>
+                                <span className="inline-flex items-start gap-1.5">
+                                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                  {displayAreas.length ? (
+                                    <span className="flex flex-col gap-1">
+                                      {displayAreas.map((area) => area.subLocations.length ? (
+                                        area.subLocations.map((subLocation) => (
+                                          <span key={`${area.location}-${subLocation.name}`}>
+                                            <strong>Area tugas:</strong> {area.location} → {subLocation.name}
+                                            {subLocation.places.length > 0 && (
+                                              <span className="block pl-2 text-slate-500">
+                                                <strong>Tempat:</strong> {subLocation.places.join(', ')}
+                                              </span>
+                                            )}
+                                          </span>
+                                        ))
+                                      ) : (
+                                        <span key={area.location}><strong>Area tugas:</strong> {area.location}</span>
+                                      ))}
+                                    </span>
+                                  ) : (
+                                    <span><strong>Area tugas:</strong> {job.regions || currentUser.location || 'Belum ditentukan'}</span>
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between gap-5 border-t border-slate-100 pt-3 lg:justify-end lg:border-0 lg:pt-0">
+                              <div className="text-right">
+                                <div className="flex items-baseline justify-end gap-1.5">
+                                  <span className="text-2xl font-black text-slate-900">{percentage}%</span>
+                                  <span className="text-xs font-semibold text-slate-500">Selesai</span>
+                                </div>
+                                <div className="mt-1.5 h-2 w-36 overflow-hidden rounded-full border border-slate-200 bg-slate-100">
+                                  <div className="h-full rounded-full bg-slate-900 transition-all" style={{ width: `${percentage}%` }} />
+                                </div>
+                                <span className="mt-1 block text-[10px] text-slate-400">
+                                  {isActive && isTaskCardExpanded ? 'Detail job terbuka' : 'Klik untuk membuka job ini'}
+                                </span>
+                              </div>
+                              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                                {isActive && isTaskCardExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <span className="rounded-md bg-slate-100 px-2.5 py-0.5 text-xs font-bold uppercase text-slate-700">Belum Ada Tugas</span>
+                    <h2 className="mt-2 text-lg font-extrabold text-slate-900">Admin belum memberikan penugasan PM.</h2>
+                    <p className="mt-1 text-sm text-slate-500">Pekerjaan akan tampil di sini setelah admin menugaskan job ke wilayah Anda.</p>
+                  </div>
+                )}
               </div>
 
               {/* DETAIL JOBS WORKSPACE (inspection-section) */}
-              {isTaskCardExpanded && (
+              {!isJobsLoading && !hasAssignedJobs && isTaskCardExpanded && (
+                <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+                  <Layers className="mx-auto mb-3 h-8 w-8 text-slate-400" />
+                  <h3 className="text-base font-bold text-slate-800">Belum ada penugasan dari admin</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Job yang ditugaskan ke wilayah {currentUser.location || 'Anda'} akan muncul di sini.
+                  </p>
+                </section>
+              )}
+
+              {hasAssignedJobs && isTaskCardExpanded && (
                 <section className="bg-white border border-slate-200 rounded-2xl shadow-xs p-5 md:p-7 space-y-6 transition-all duration-300">
                   {/* Header Detail & Instruksi */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-2">
                     <div>
                       <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
                         <Layers className="w-4 h-4 text-slate-800" />
-                        <span>Daftar Pemeriksaan Lapangan (Per-Jobs)</span>
+                        <span>Checklist Pekerjaan</span>
                       </h3>
                       <p className="text-xs text-slate-500">
-                        Pilih nomor daftar jobs untuk mengisi data checklist inspeksi tiap perangkat.
+                        Pilih satu job utama, lalu kerjakan sub-tugas checklist di dalamnya.
                       </p>
                     </div>
                     <span className="inline-flex items-center text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-lg">
@@ -823,77 +1305,84 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                     </span>
                   </div>
 
-                  {/* Tombol Tabs Daftar Jobs */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                        PILIH SUB-JOBS UNTUK DIKERJAKAN:
+                        SUB-TUGAS CHECKLIST:
                       </span>
-                      <span className="text-xs text-slate-700 font-semibold">
-                        Sedang aktif di: {activeJob.title}
-                      </span>
+                      <span className="text-xs text-slate-700 font-semibold">{activeJob.title}</span>
                     </div>
-
-                    {/* Horizontal Navigation Tab Buttons */}
-                    <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-slate-200">
-                      {(Object.values(jobsDatabase) as JobTabItem[]).map((job: JobTabItem) => {
-                        const isActive = job.id === currentJobId;
-                        return (
-                          <button
-                            key={job.id}
-                            type="button"
-                            onClick={() => setCurrentJobId(job.id)}
-                            className={`px-4 py-2.5 rounded-xl border text-xs sm:text-sm font-semibold flex items-center gap-2 shrink-0 transition-all cursor-pointer ${
-                              isActive
-                                ? 'bg-white border-slate-900 text-slate-900 shadow-xs'
-                                : 'bg-slate-100 hover:bg-slate-200/80 border-transparent text-slate-600'
-                            }`}
-                          >
-                            <span
-                              className={`w-5 h-5 rounded-full text-[11px] flex items-center justify-center font-bold ${
-                                isActive ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-700'
+                    {subtaskGroups.length > 0 ? (
+                      <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-200 pb-2">
+                        {subtaskGroups.map((device, index) => {
+                          const isSelected = device.subtaskId === activeSubtask?.subtaskId;
+                          const points = activeJob.devices.filter((point) => point.subtaskId === device.subtaskId);
+                          return (
+                            <button
+                              key={device.id}
+                              type="button"
+                              onClick={() => {
+                                setActiveSubtaskId(device.subtaskId);
+                                setJobsDatabase((previous) => {
+                                  const job = previous[currentJobId];
+                                  if (!job) return previous;
+                                  const firstPoint = job.devices.find((point) => point.subtaskId === device.subtaskId);
+                                  return {
+                                    ...previous,
+                                    [currentJobId]: {
+                                      ...job,
+                                      devices: job.devices.map((point) =>
+                                        point.id === firstPoint?.id ? { ...point, expanded: true } : point
+                                      ),
+                                    },
+                                  };
+                                });
+                              }}
+                              className={`flex shrink-0 items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-all cursor-pointer ${
+                                isSelected
+                                  ? 'border-slate-900 bg-white text-slate-900 shadow-xs'
+                                  : 'border-transparent bg-slate-100 text-slate-600 hover:bg-slate-200/80'
                               }`}
                             >
-                              {job.id}
-                            </span>
-                            <span>{job.title}</span>
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                job.devices.some((device) => device.statusState === 'DONE')
-                                  ? 'bg-emerald-500'
-                                  : 'bg-slate-300'
-                              }`}
-                            ></span>
-                          </button>
-                        );
-                      })}
-
-                    </div>
+                              <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${isSelected ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                                {index + 1}
+                              </span>
+                              <span>{device.taskTitle}</span>
+                              <span className={`h-2 w-2 rounded-full ${points.length > 0 && points.every((point) => point.statusState === 'DONE') ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500">Job ini belum memiliki sub-tugas checklist.</p>
+                    )}
                   </div>
 
-                  {/* KONTEN CONTAINER PERANGKAT DI JOBS TERPILIH */}
+                  {/* Form sub-tugas terpilih */}
                   <div className="space-y-5">
-                    {activeJob.devices.length === 0 ? (
+                    {activeSubtaskDevices.length === 0 ? (
                       <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50">
                         <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                         <p className="text-sm font-semibold text-slate-600">
-                          Belum ada titik perangkat pada {activeJob.title}
+                          Belum ada titik perangkat pada {activeSubtask?.taskTitle || activeJob.title}
                         </p>
                         <p className="text-xs text-slate-400 mt-1">
-                          Klik tombol Tambah Titik Perangkat untuk mulai mengisi data.
+                          Tambahkan titik perangkat pada sub-tugas aktif ini.
                         </p>
-                        <button
-                          type="button"
-                          onClick={addNewDevice}
-                          className="mt-3 px-3 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-blue-600 transition-colors cursor-pointer"
-                        >
-                          + Tambah Perangkat Sekarang
-                        </button>
                       </div>
                     ) : (
-                      activeJob.devices.map((device) => {
+                      activeSubtaskDevices.map((device) => {
                         const isExpanded = device.expanded;
                         const isLocked = device.statusState === 'DONE';
+                        const isNegative = isAbnormalStatus(device);
+                        const conditionOptions = device.hasCondition
+                          ? getConditionOptions(device.pmType, device.conditionOptions)
+                          : [];
+                        const matchedLogicRange = device.conditionLogic.find((range) =>
+                          device.formData.conditionValue !== undefined
+                          && device.formData.conditionValue >= range.min
+                          && device.formData.conditionValue <= range.max
+                        );
 
                         return (
                           <div
@@ -904,6 +1393,17 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                 : 'border-slate-200 bg-slate-50/70'
                             }`}
                           >
+                            <div className="mb-3 flex items-start justify-between gap-3">
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-900">{device.taskTitle}</h4>
+                                <p className="text-[11px] text-slate-500">Titik Perangkat {activeSubtaskDevices.indexOf(device) + 1}</p>
+                              </div>
+                              {device.hasTimestamp && (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">
+                                  <Clock className="h-3 w-3" /> Waktu & GPS otomatis
+                                </span>
+                              )}
+                            </div>
                             {/* Baris Utama Header Perangkat: Lokasi Perangkat, Tanda Tambah (+), Tanda Panah Segitiga (▼/▲), Tanda Sampah (Hapus) */}
                             <div
                               className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
@@ -934,16 +1434,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
                               {/* Tombol Toolbar Aksi Cepat: Tambah (+), Panah Segitiga (▼/▲), Hapus (Sampah) */}
                               <div className="flex items-center justify-end gap-1.5 shrink-0">
-                                {/* Tanda Tambah (+) */}
-                                <button
-                                  type="button"
-                                  onClick={addNewDevice}
-                                  title="Tambah Kolom Perangkat Baru"
-                                  className="w-8 h-8 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 flex items-center justify-center text-xs font-bold transition-colors shadow-xs cursor-pointer"
-                                >
-                                  <Plus className="w-4 h-4 text-blue-600" />
-                                </button>
-
                                 {/* Tanda Panah Segitiga Toggle Expand/Collapse */}
                                 <button
                                   type="button"
@@ -956,6 +1446,16 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                   ) : (
                                     <ChevronDown className="w-4 h-4 text-slate-500" />
                                   )}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={addDeviceToActiveSubtask}
+                                  title="Tambah titik perangkat"
+                                  aria-label="Tambah titik perangkat"
+                                  className="w-8 h-8 rounded-lg bg-white border border-emerald-200 hover:bg-emerald-50 text-emerald-700 flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                                >
+                                  <Plus className="w-4 h-4" />
                                 </button>
 
                                 {/* Tanda Sampah (Hapus) */}
@@ -975,8 +1475,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                               <div className="pt-4 space-y-4 animate-in fade-in duration-200">
                                 {/* Grid Form dengan Titik Dua (:) Sejajar Sempurna */}
                                 <div className="space-y-3.5 max-w-3xl">
-                                  {/* 1. Import Foto */}
-                                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                                  {/* 1. Foto bukti */}
+                                  {device.hasPhoto && <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
                                     <div className="w-36 text-xs font-bold text-slate-700 flex justify-between items-center shrink-0">
                                       <span>Import Foto</span>
                                       <span className="font-black text-slate-400 mr-2">:</span>
@@ -995,7 +1495,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                         </span>
                                         <input
                                           type="file"
-                                          accept="image/*"
+                                          accept="image/jpeg,image/png,image/webp"
                                           className="hidden"
                                           disabled={isLocked}
                                           onChange={(e) => handlePhotoUpload(device.id, e)}
@@ -1032,18 +1532,18 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                         </span>
                                       )}
                                     </div>
-                                  </div>
+                                  </div>}
 
                                   {/* 2. Status / Kondisi Lapangan */}
-                                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                                  {device.hasCondition && <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
                                     <div className="w-36 text-xs font-bold text-slate-700 flex justify-between items-center shrink-0">
                                       <span>Status</span>
                                       <span className="font-black text-slate-400 mr-2">:</span>
                                     </div>
                                     <div className="flex-1 flex flex-wrap items-center gap-2.5">
-                                      {getConditionOptions(activeJob.pmType).map((cond) => {
-                                        const isSelected =
-                                          device.formData.status.toLowerCase() === cond.value.toLowerCase();
+                                      {(device.conditionMode === 'options' || device.conditionMode === 'both' || !device.conditionMode) && conditionOptions.map((cond) => {
+                                        const selectedCondition = device.formData.conditionSelection || device.formData.status;
+                                        const isSelected = selectedCondition.toLowerCase() === cond.value.toLowerCase();
                                         return (
                                           <label
                                             key={cond.value}
@@ -1065,7 +1565,10 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                               value={cond.value}
                                               checked={isSelected}
                                               disabled={isLocked}
-                                              onChange={() => updateDeviceForm(device.id, { status: cond.value })}
+                                              onChange={() => updateDeviceForm(device.id, {
+                                                status: cond.value,
+                                                conditionSelection: cond.value,
+                                              })}
                                               className="accent-slate-900"
                                             />
                                             {cond.color === 'emerald' ? (
@@ -1081,11 +1584,43 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                           </label>
                                         );
                                       })}
+                                      {(device.conditionMode === 'logic' || device.conditionMode === 'both') && (
+                                        <div className="flex w-full flex-col gap-2">
+                                          <label className="flex max-w-xs flex-col gap-1 text-xs font-semibold text-slate-600">
+                                            Input Nilai
+                                            <input
+                                              type="number"
+                                              step="any"
+                                              value={device.formData.conditionValue ?? ''}
+                                              disabled={isLocked}
+                                              onChange={(event) => {
+                                                const rawValue = event.target.value;
+                                                const parsedValue = Number(rawValue);
+                                                const conditionValue = rawValue === '' || !Number.isFinite(parsedValue)
+                                                  ? undefined
+                                                  : parsedValue;
+                                                const matchedRange = conditionValue === undefined
+                                                  ? undefined
+                                                  : device.conditionLogic.find((range) => conditionValue >= range.min && conditionValue <= range.max);
+                                                updateDeviceForm(device.id, {
+                                                  conditionValue,
+                                                  logicOutput: matchedRange?.output || '',
+                                                  ...(device.conditionMode === 'logic' ? { status: matchedRange?.output || '' } : {}),
+                                                });
+                                              }}
+                                              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                                            />
+                                          </label>
+                                          <p className={`text-xs ${matchedLogicRange ? 'font-semibold text-slate-800' : 'text-slate-500'}`}>
+                                            Teks otomatis: {matchedLogicRange?.output || 'Nilai belum masuk rentang yang diatur.'}
+                                          </p>
+                                        </div>
+                                      )}
                                     </div>
-                                  </div>
+                                  </div>}
 
                                   {/* 3. Keterangan */}
-                                  <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-2">
+                                  {(device.hasNotes || isNegative) && <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-2">
                                     <div className="w-36 text-xs font-bold text-slate-700 flex justify-between items-center shrink-0 pt-2">
                                       <span>Keterangan</span>
                                       <span className="font-black text-slate-400 mr-2">:</span>
@@ -1104,30 +1639,31 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                             : 'text-slate-800 bg-white border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
                                         }`}
                                         placeholder={
-                                          ['rusak', 'kotor', 'kadaluarsa', 'error', 'berantakan', 'perlu_penataan'].includes(
-                                            device.formData.status.toLowerCase()
-                                          )
+                                          isNegative
                                             ? 'Wajib ketik rincian temuan kerusakan / ketidaknormalan & tindakan penanganan...'
-                                            : 'Catatan hasil inspeksi teknisi (opsional jika kondisi normal)...'
+                                            : 'Keterangan petugas di lapangan...'
                                         }
                                       />
                                       <p
-                                        className={`text-[10px] ${
-                                          ['rusak', 'kotor', 'kadaluarsa', 'error', 'berantakan', 'perlu_penataan'].includes(
-                                            device.formData.status.toLowerCase()
-                                          )
-                                            ? 'text-rose-600 font-bold'
-                                            : 'text-slate-400'
-                                        }`}
+                                        className={`text-[10px] ${isNegative || device.hasNotes ? 'text-rose-600 font-bold' : 'text-slate-400'}`}
                                       >
-                                        {['rusak', 'kotor', 'kadaluarsa', 'error', 'berantakan', 'perlu_penataan'].includes(
-                                          device.formData.status.toLowerCase()
-                                        )
-                                          ? '⚠️ Kondisi tidak normal: Kolom keterangan ini WAJIB diisi.'
-                                          : 'Informasi keterangan bersifat opsional untuk status normal.'}
+                                        {isNegative
+                                          ? 'Kondisi tidak normal: keterangan penanganan wajib diisi.'
+                                          : device.hasNotes
+                                            ? 'Keterangan petugas wajib diisi sesuai pengaturan admin.'
+                                            : 'Keterangan wajib diisi untuk kondisi tidak normal.'}
                                       </p>
                                     </div>
-                                  </div>
+                                  </div>}
+
+                                  {device.hasTimestamp && device.formData.capturedAt && (
+                                    <div className="flex flex-col gap-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                      <span className="font-semibold">Waktu: {new Date(device.formData.capturedAt).toLocaleString('id-ID')}</span>
+                                      {device.formData.latitude !== undefined && device.formData.longitude !== undefined
+                                        ? <span>GPS: {device.formData.latitude.toFixed(6)}, {device.formData.longitude.toFixed(6)}</span>
+                                        : <span>Lokasi GPS tidak tersedia; waktu tetap tercatat.</span>}
+                                    </div>
+                                  )}
 
                                   {/* 4. Durasi */}
                                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
@@ -1215,21 +1751,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                     )}
                   </div>
 
-                  {/* Tombol Tambah Perangkat Global di Bawah Halaman */}
-                  <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-200">
-                    <button
-                      type="button"
-                      onClick={addNewDevice}
-                      className="w-full sm:w-auto px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 border border-slate-900 transition-colors shadow-xs cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Tambah Titik Perangkat Baru di Jobs Ini</span>
-                    </button>
-                    <div className="text-[12px] text-slate-400 font-medium">
-                      *Semua kolom dengan tanda titik dua (:) sejajar otomatis untuk memudahkan input data.
-                    </div>
-                  </div>
-
                   {/* Banner & Tombol Submit Laporan Lengkap 100% */}
                   {isFullyCompleted && !isSubmitted && (
                     <div className="p-5 bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border-2 border-emerald-300 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in duration-300">
@@ -1284,6 +1805,46 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                   )}
                 </section>
               )}
+
+              {hasAssignedJobs && totalJobsPages > 1 && (
+                <nav aria-label="Pagination job" className="flex items-center justify-center gap-2 py-2">
+                  <button
+                    type="button"
+                    onClick={() => goToJobsPage(currentJobsPage - 1)}
+                    disabled={currentJobsPage === 1}
+                    aria-label="Halaman sebelumnya"
+                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  {Array.from({ length: totalJobsPages }, (_, index) => index + 1).map((page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      onClick={() => goToJobsPage(page)}
+                      aria-current={page === currentJobsPage ? 'page' : undefined}
+                      aria-label={`Halaman ${page}`}
+                      className={`h-9 min-w-9 rounded-lg border px-3 text-sm font-semibold ${
+                        page === currentJobsPage
+                          ? 'border-slate-900 bg-slate-900 text-white'
+                          : 'border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => goToJobsPage(currentJobsPage + 1)}
+                    disabled={currentJobsPage === totalJobsPages}
+                    aria-label="Halaman berikutnya"
+                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                  <span className="ml-2 text-xs text-slate-500">{allAssignedJobs.length} job</span>
+                </nav>
+              )}
             </>
           )}
 
@@ -1307,7 +1868,11 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           {/* VIEW C: RIWAYAT SELESAI */}
           {/* ===================================================================== */}
           {activeMenu === 'riwayat' && (
-            <RiwayatSelesaiView onTriggerToast={triggerToast} userUid={currentUser.uid} />
+            <RiwayatSelesaiView
+              onTriggerToast={triggerToast}
+              userUid={currentUser.uid}
+              portalId={currentUser.portalAddress}
+            />
           )}
         </main>
       </div>
@@ -1408,7 +1973,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                 <span className="font-semibold text-slate-900">{activeJob.title}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Wilayah Tugas:</span>
+                <span className="text-slate-500">Lokasi Petugas:</span>
                 <span className="font-semibold text-slate-900">
                   {currentUser?.location || 'Belum ditentukan'}
                 </span>

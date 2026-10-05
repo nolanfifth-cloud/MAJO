@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { changeFirebasePassword, createAdminInvitation, isFirebaseConfigured } from '../services/firebase';
+import { clearTemporaryBrowserCache } from '../services/workflowStore';
 
 interface ProfileSettingsViewProps {
   onNavigateToDashboard: () => void;
@@ -27,6 +29,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
   const [showNewPass, setShowNewPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Double Verification Clear Storage Modal States
   const [isCleanModalOpen, setIsCleanModalOpen] = useState(false);
@@ -49,6 +52,8 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
     message: '',
     isSuccess: true,
   });
+  const [adminInviteCode, setAdminInviteCode] = useState('');
+  const [isCreatingAdminInvite, setIsCreatingAdminInvite] = useState(false);
 
   const triggerToast = (title: string, message: string, isSuccess = true) => {
     setToast({ show: true, title, message, isSuccess });
@@ -57,8 +62,34 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
     }, 3500);
   };
 
+  const handleCreateAdminInvite = async () => {
+    setIsCreatingAdminInvite(true);
+    try {
+      const code = await createAdminInvitation();
+      setAdminInviteCode(code);
+      triggerToast('Undangan Dibuat', 'Kode admin berlaku 7 hari dan hanya dapat digunakan satu kali.');
+    } catch (error) {
+      triggerToast(
+        'Gagal Membuat Undangan',
+        error instanceof Error ? error.message : 'Periksa sesi admin dan aturan Firestore.',
+        false
+      );
+    } finally {
+      setIsCreatingAdminInvite(false);
+    }
+  };
+
+  const handleCopyAdminInvite = async () => {
+    try {
+      await navigator.clipboard.writeText(adminInviteCode);
+      triggerToast('Kode Disalin', 'Kirim kode ini hanya kepada calon administrator yang dipercaya.');
+    } catch {
+      triggerToast('Gagal Menyalin', 'Browser tidak mengizinkan akses clipboard.', false);
+    }
+  };
+
   // Handle Password Change Form
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError(null);
 
@@ -80,27 +111,27 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
       return;
     }
 
-    setPasswordError('Perubahan kata sandi belum terhubung ke Firebase Authentication.');
-    triggerToast('Belum tersedia', 'Kata sandi belum diubah karena integrasi Firebase belum dijalankan.', false);
+    setIsChangingPassword(true);
+    try {
+      await changeFirebasePassword(oldPassword, newPassword);
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      triggerToast('Password Diperbarui', 'Kata sandi akun Firebase berhasil diubah.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gagal memperbarui kata sandi.';
+      setPasswordError(message);
+      triggerToast('Gagal Mengubah Password', message, false);
+    } finally {
+      setIsChangingPassword(false);
+    }
   };
 
   // Handle Double Verification Local Storage Cleanup
   const handleExecuteCleanStorage = () => {
     setIsCleaning(true);
     setTimeout(() => {
-      // Clear temporary items in sessionStorage or localStorage safe cache keys
-      try {
-        const keysToRemove = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key && (key.includes('cache') || key.includes('temp') || key.includes('draft'))) {
-            keysToRemove.push(key);
-          }
-        }
-        keysToRemove.forEach((k) => localStorage.removeItem(k));
-      } catch (err) {
-        console.error('Storage clear err:', err);
-      }
+      const removedCount = clearTemporaryBrowserCache();
 
       setIsCleaning(false);
       setIsCleanModalOpen(false);
@@ -108,7 +139,7 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
       setAgreeConfirmNoUnsaved(false);
       triggerToast(
         'Cache Dibersihkan',
-        'Penyimpanan lokal sementara telah disegarkan. File cloud tetap aman.',
+        `${removedCount} key cache sementara dihapus. Akun, sesi, dan data PM tidak diubah.`,
         true
       );
     }, 450);
@@ -245,7 +276,6 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                 Batal
               </button>
               <button
-                type="button"
                 disabled={!agreeUnderstandCache || !agreeConfirmNoUnsaved || isCleaning}
                 onClick={handleExecuteCleanStorage}
                 className={`px-5 py-2.5 rounded-xl font-bold text-xs shadow-sm transition-all flex items-center gap-2 cursor-pointer ${
@@ -522,6 +552,51 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
           {/* RIGHT COLUMN: Ganti Password & Logout (5 Cols) */}
           {/* ===================================================================== */}
           <div className="lg:col-span-5 space-y-6">
+            {currentUser.role === 'admin' && (
+              <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Undangan Administrator</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    Terbitkan kode untuk bergabung sebagai admin di portal ini. Kode berlaku 7 hari dan hanya bisa digunakan sekali.
+                  </p>
+                </div>
+                {adminInviteCode ? (
+                  <div className="flex flex-col gap-2">
+                    <label htmlFor="admin-invite-code" className="text-xs font-bold text-slate-700">KODE UNDANGAN</label>
+                    <div className="flex gap-2">
+                      <input
+                        id="admin-invite-code"
+                        type="text"
+                        readOnly
+                        value={adminInviteCode}
+                        className="min-w-0 flex-1 px-3 py-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-mono text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCopyAdminInvite}
+                        title="Salin kode undangan"
+                        aria-label="Salin kode undangan"
+                        className="px-3 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-amber-700">Simpan kode ini sekarang. Kode tidak dapat dipulihkan setelah meninggalkan halaman.</p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleCreateAdminInvite}
+                    disabled={!isFirebaseConfigured || isCreatingAdminInvite}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-blue-700 text-white text-xs font-bold hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">key</span>
+                    {isCreatingAdminInvite ? 'Membuat kode...' : 'Buat Kode Undangan'}
+                  </button>
+                )}
+              </section>
+            )}
+
             {/* KARTU 3: GANTI PASSWORD FORM */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="p-8 border-b border-slate-100 flex items-center gap-4">
@@ -560,9 +635,11 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
 
                 {/* Kata Sandi Saat Ini */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-2">Kata Sandi Saat Ini</label>
+                  <label htmlFor="admin-current-password" className="block text-xs font-bold text-slate-700 mb-2">Kata Sandi Saat Ini</label>
                   <div className="relative">
                     <input
+                      id="admin-current-password"
+                      autoComplete="current-password"
                       type={showOldPass ? 'text' : 'password'}
                       value={oldPassword}
                       onChange={(e) => setOldPassword(e.target.value)}
@@ -606,9 +683,11 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
 
                 {/* Kata Sandi Baru */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-2">Kata Sandi Baru</label>
+                  <label htmlFor="admin-new-password" className="block text-xs font-bold text-slate-700 mb-2">Kata Sandi Baru</label>
                   <div className="relative">
                     <input
+                      id="admin-new-password"
+                      autoComplete="new-password"
                       type={showNewPass ? 'text' : 'password'}
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
@@ -701,11 +780,10 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                 <div className="pt-3">
                   <button
                     type="submit"
-                    className="w-full py-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={isChangingPassword}
+                    className="w-full py-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-wait"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                    </svg>
+                    {isChangingPassword ? 'Memperbarui...' : 'Simpan Perubahan Password'}
                     <span>Simpan Perubahan Password</span>
                   </button>
                 </div>

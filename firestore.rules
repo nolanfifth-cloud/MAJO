@@ -2,8 +2,234 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Firebase Data tab and the app need immediate access without being blocked by auth context.
-    allow read, write: if true;
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function hasProfile() {
+      return signedIn() && exists(profilePath(request.auth.uid));
+    }
+
+    function profile() {
+      return get(profilePath(request.auth.uid)).data;
+    }
+
+    function isPortalAdmin(portalId) {
+      return hasProfile()
+        && profile().role == 'admin'
+        && profile().portalAddress == portalId;
+    }
+
+    function isPortalUser(portalId) {
+      return hasProfile()
+        && profile().role == 'user'
+        && profile().portalAddress == portalId;
+    }
+
+    function isAssignedToJob() {
+      return signedIn()
+        && resource.data.targetUserUids is list
+        && resource.data.targetUserUids.hasAny([request.auth.uid]);
+    }
+
+    function portalConfigExists(portalId) {
+      return exists(/databases/$(database)/documents/appConfig/$(portalId));
+    }
+
+    function portalHasLocation(portalId, location) {
+      let configPath = /databases/$(database)/documents/appConfig/$(portalId);
+      return exists(configPath)
+        && get(configPath).data.masterWilayah is list
+        && get(configPath).data.masterWilayah.hasAny([location]);
+    }
+
+    function userIsAssignedToJob(portalId, jobId, location) {
+      let jobPath = /databases/$(database)/documents/jobs/$(jobId);
+      return exists(jobPath)
+        && get(jobPath).data.portalId == portalId
+        && get(jobPath).data.targetWilayahList is list
+        && get(jobPath).data.targetWilayahList.hasAny([location]);
+    }
+
+    function adminInvitePath(inviteId) {
+      return /databases/$(database)/documents/adminInvites/$(inviteId);
+    }
+
+    function validAdminInviteClaim(inviteId) {
+      let invitePath = adminInvitePath(inviteId);
+      return existsAfter(invitePath)
+        && getAfter(invitePath).data.usedBy == request.auth.uid
+        && getAfter(invitePath).data.usedAt == request.time
+        && getAfter(invitePath).data.expiresAt > request.time;
+    }
+
+    match /appConfig/{portalId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isPortalAdmin(portalId)
+        && request.resource.data.portalAddress == portalId;
+      allow delete: if false;
+    }
+
+    match /portalJobCatalog/{portalId}/locations/{location}/jobs/{jobId} {
+      allow get, list: if isPortalUser(portalId)
+        && profile().location == location;
+      allow create, update: if isPortalAdmin(portalId)
+        && request.resource.data.portalId == portalId
+        && request.resource.data.location == location
+        && request.resource.data.jobId == jobId
+        && userIsAssignedToJob(portalId, jobId, location);
+      allow delete: if isPortalAdmin(portalId);
+    }
+
+    match /adminInvites/{inviteId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && isPortalAdmin(request.resource.data.portalAddress)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.keys().hasOnly([
+          'portalAddress', 'createdBy', 'createdAt', 'expiresAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'portalAddress', 'createdBy', 'createdAt', 'expiresAt'
+        ]);
+      allow update: if signedIn()
+        && !('usedBy' in resource.data)
+        && resource.data.expiresAt > request.time
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.usedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedBy', 'usedAt']);
+      allow delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && (
+        request.auth.uid == userId
+        || isPortalAdmin(resource.data.portalAddress)
+      );
+      allow list: if isPortalAdmin(resource.data.portalAddress);
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.portalAddress is string
+        && request.resource.data.keys().hasAll([
+          'name', 'email', 'username', 'role', 'portalAddress', 'createdAt'
+        ])
+        && (
+          (request.resource.data.role == 'user'
+            && portalConfigExists(request.resource.data.portalAddress)
+            && request.resource.data.location is string
+            && portalHasLocation(request.resource.data.portalAddress, request.resource.data.location)
+            && request.resource.data.keys().hasOnly([
+              'name', 'email', 'username', 'role', 'portalAddress', 'portalId', 'location', 'createdAt'
+            ]))
+          || (request.resource.data.role == 'admin'
+            && request.resource.data.adminInviteId is string
+            && validAdminInviteClaim(request.resource.data.adminInviteId)
+            && request.resource.data.keys().hasOnly([
+              'name', 'email', 'username', 'role', 'portalAddress', 'createdAt', 'adminInviteId'
+            ]))
+        );
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && (
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['password'])
+            && !request.resource.data.keys().hasAny(['password']))
+          || (resource.data.role == 'admin'
+            && resource.data.keys().hasAny(['adminInviteId'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['adminInviteId'])
+            && !request.resource.data.keys().hasAny(['adminInviteId']))
+        );
+      allow delete: if false;
+
+      match /jobAssignments/{jobId} {
+        allow get, list: if signedIn() && request.auth.uid == userId;
+        allow create, update: if isPortalAdmin(request.resource.data.portalId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.userUid == userId
+          && request.resource.data.jobId == jobId
+          && exists(profilePath(userId))
+          && get(profilePath(userId)).data.role == 'user'
+          && get(profilePath(userId)).data.portalAddress == request.resource.data.portalId
+          && get(profilePath(userId)).data.location == request.resource.data.location
+          && userIsAssignedToJob(
+            request.resource.data.portalId,
+            jobId,
+            request.resource.data.location
+          );
+        allow delete: if isPortalAdmin(resource.data.portalId)
+          && resource.data.createdBy == request.auth.uid;
+      }
+    }
+
+    match /passwordResetRequests/{requestId} {
+      allow get, list: if isPortalAdmin(resource.data.portalAddress);
+      allow create, update, delete: if false;
+    }
+
+    match /jobs/{jobId} {
+      allow get: if isAssignedToJob()
+        || isPortalAdmin(resource.data.portalId)
+        || (isPortalUser(resource.data.portalId)
+          && resource.data.targetWilayahList is list
+          && profile().location in resource.data.targetWilayahList);
+      allow list: if isPortalAdmin(resource.data.portalId);
+      allow create: if isPortalAdmin(request.resource.data.portalId)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.targetUserUids is list;
+      allow update: if isPortalAdmin(resource.data.portalId)
+        && resource.data.createdBy == request.auth.uid
+        && request.resource.data.portalId == resource.data.portalId
+        && request.resource.data.createdBy == request.auth.uid;
+      allow delete: if isPortalAdmin(resource.data.portalId);
+    }
+
+    match /jobProgress/{progressId} {
+      allow get, list: if isPortalAdmin(resource.data.portalId)
+        || (signedIn() && resource.data.userUid == request.auth.uid);
+      allow create: if isPortalUser(request.resource.data.portalId)
+        && request.resource.data.userUid == request.auth.uid
+        && request.resource.data.location == profile().location
+        && userIsAssignedToJob(
+          request.resource.data.portalId,
+          request.resource.data.jobId,
+          request.resource.data.location
+        );
+      allow update: if isPortalUser(request.resource.data.portalId)
+        && resource.data.userUid == request.auth.uid
+        && resource.data.portalId == request.resource.data.portalId
+        && resource.data.jobId == request.resource.data.jobId
+        && request.resource.data.userUid == request.auth.uid
+        && request.resource.data.location == profile().location
+        && userIsAssignedToJob(
+          request.resource.data.portalId,
+          request.resource.data.jobId,
+          request.resource.data.location
+        );
+      allow delete: if false;
+    }
+
+    match /completedReports/{reportId} {
+      allow get, list: if isPortalAdmin(resource.data.portalId)
+        || (isPortalUser(resource.data.portalId) && resource.data.submittedBy == request.auth.uid);
+      allow create: if isPortalUser(request.resource.data.portalId)
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.region == profile().location
+        && userIsAssignedToJob(
+          request.resource.data.portalId,
+          request.resource.data.jobId,
+          request.resource.data.region
+        );
+      allow update, delete: if false;
+    }
   }
 }
 

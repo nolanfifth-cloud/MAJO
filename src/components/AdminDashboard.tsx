@@ -1,16 +1,18 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { PmItem, AuthView } from '../types';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { ChecklistItem, PmItem, AuthView } from '../types';
 import { CreateJobsView } from './CreateJobsView';
 import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
 import { downloadPmReportExcel } from '../services/excelExport';
 import { getPortalConfig } from '../services/workflowStore';
 import {
-  loadAdminJobsFromFirestore,
-  loadCompletedReportsFromFirestore,
   loadJobProgressFromFirestore,
+  subscribeToJobProgressFromFirestore,
   loadPortalConfigFromFirestore,
   loadRegisteredAccountsFromFirestore,
+  loadJobsForPortalFromFirestore,
+  assignExistingAdminJobToUsers,
+  deleteAdminJobFromFirestore,
   saveAdminJobToFirestore,
 } from '../services/firestoreStore';
 
@@ -18,6 +20,7 @@ interface AdminDashboardProps {
   onNavigate: (view: AuthView) => void;
   onLogout?: () => void;
   currentUser?: {
+    uid?: string;
     username: string;
     name?: string;
     role?: string;
@@ -27,6 +30,34 @@ interface AdminDashboardProps {
 }
 
 const INITIAL_PMS: PmItem[] = [];
+
+interface EditablePmModule {
+  id: string;
+  name: string;
+  checklist: EditableChecklistItem[];
+  newItemText: string;
+  hasPhoto: boolean;
+  hasCondition: boolean;
+  conditionOptionsInput: string;
+  hasTimestamp: boolean;
+  hasNotes: boolean;
+}
+
+interface EditableChecklistItem extends ChecklistItem {
+  conditionOptionsInput: string;
+}
+
+const createEditablePmModule = (name = '', checklist: EditableChecklistItem[] = []): EditablePmModule => ({
+  id: `subtask-${crypto.randomUUID()}`,
+  name,
+  checklist,
+  newItemText: '',
+  hasPhoto: true,
+  hasCondition: true,
+  conditionOptionsInput: '',
+  hasTimestamp: true,
+  hasNotes: false,
+});
 
 const getRemainingDaysLabel = (endDate: string) => {
   if (!endDate) return 'Tanggal berakhir belum ditentukan';
@@ -45,52 +76,38 @@ const deduplicateJobs = (jobs: PmItem[]): PmItem[] => {
   return Array.from(uniqueJobs.values());
 };
 
-const applyCompletedReports = (jobs: PmItem[], reports: Record<string, unknown>[]): PmItem[] => {
-  const completedByTitle = new Map(
-    reports
-      .map((report) => [String(report.title || ''), report] as const)
-      .filter(([title]) => Boolean(title))
-  );
-
-  return jobs.map((job) => {
-    const report = completedByTitle.get(job.title);
-    if (!report) return job;
-    const technicianName = String(report.technicianName || job.pic || '');
-    return {
-      ...job,
-      progress: 100,
-      doneCount: job.totalCount,
-      pendingCount: 0,
-      recentLog: {
-        ...job.recentLog,
-        name: technicianName,
-        avatar: technicianName
-          .split(' ')
-          .map((part) => part[0])
-          .join('')
-          .slice(0, 2)
-          .toUpperCase(),
-        activity: 'Laporan PM telah diselesaikan oleh teknisi.',
-        time: String(report.completedAt || 'Baru saja'),
-      },
-    };
-  });
-};
-
 const applyJobProgress = (jobs: PmItem[], snapshots: Record<string, unknown>[]): PmItem[] => {
-  const progressByJob = new Map(snapshots.map((snapshot) => [String(snapshot.jobId || ''), snapshot]));
+  const progressByJob = new Map<string, Record<string, unknown>[]>();
+  snapshots.forEach((snapshot) => {
+    const jobId = String(snapshot.jobId || '');
+    if (!jobId) return;
+    progressByJob.set(jobId, [...(progressByJob.get(jobId) || []), snapshot]);
+  });
   return jobs.map((job) => {
-    const snapshot = progressByJob.get(job.id);
-    if (!snapshot) return job;
-    const progress = Number(snapshot.progress || 0);
-    const doneCount = Number(snapshot.doneCount || 0);
-    const totalCount = Number(snapshot.totalCount || job.totalCount);
+    const recipients = new Set(job.targetUserUids || []);
+    const jobSnapshots = (progressByJob.get(job.id) || []).filter((snapshot) =>
+      recipients.size === 0 || recipients.has(String(snapshot.userUid || ''))
+    );
+    const doneCount = jobSnapshots.reduce((total, snapshot) => total + Number(snapshot.doneCount || 0), 0);
+    const expectedTotal = job.totalCount * Math.max(recipients.size, 1);
+    const totalCount = Math.max(
+      jobSnapshots.reduce((total, snapshot) => total + Number(snapshot.totalCount || 0), 0),
+      expectedTotal
+    );
+    const progress = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
     return {
       ...job,
       progress,
       doneCount,
       totalCount,
       pendingCount: Math.max(0, totalCount - doneCount),
+      fieldProgress: jobSnapshots.map((snapshot) => ({
+        userUid: String(snapshot.userUid || ''),
+        technicianName: String(snapshot.technicianName || ''),
+        location: String(snapshot.location || ''),
+        updatedAt: String(snapshot.updatedAt || ''),
+        devices: Array.isArray(snapshot.devices) ? snapshot.devices as Record<string, unknown>[] : [],
+      })),
     };
   });
 };
@@ -169,19 +186,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 }) => {
   // Primary list state
   const [pmList, setPmList] = useState<PmItem[]>(INITIAL_PMS);
+  const deletedJobIds = useRef(new Set<string>());
   const [connectedTechnicians, setConnectedTechnicians] = useState(0);
   const [configuredRegions, setConfiguredRegions] = useState<string[]>([]);
   const [selectedPmId, setSelectedPmId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRegionFilter, setSelectedRegionFilter] = useState('Semua Region');
-  const [isPortalConfigured, setIsPortalConfigured] = useState<boolean>(() => {
-    try {
-      const config = getPortalConfig();
-      return Boolean(config.isActivated && (config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0)));
-    } catch {
-      return false;
-    }
-  });
   const [hasConfiguredLocation, setHasConfiguredLocation] = useState<boolean>(() => {
     try {
       const config = getPortalConfig();
@@ -190,14 +200,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return false;
     }
   });
-  const [showWarningBanner, setShowWarningBanner] = useState<boolean>(() => {
-    try {
-      const config = getPortalConfig();
-      return !(config.isActivated && (config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0)));
-    } catch {
-      return true;
-    }
-  });
+  const [isPortalConfigLoading, setIsPortalConfigLoading] = useState(true);
 
   // Synchronize with localStorage (created jobs by admin & completed reports by user)
   useEffect(() => {
@@ -206,10 +209,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const hasLocation =
         portalConfig.masterWilayah.length > 0 ||
         portalConfig.masterGroups.some((group) => group.locations.length > 0);
-      const portalConfigured = Boolean(portalConfig.isActivated && hasLocation);
       setHasConfiguredLocation(hasLocation);
-      setIsPortalConfigured(portalConfigured);
-      setShowWarningBanner(!portalConfigured);
 
       let baseList = [...INITIAL_PMS];
       const savedAdminJobs = localStorage.getItem('majo_admin_created_jobs');
@@ -219,14 +219,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           const existingIds = new Set(baseList.map((p) => p.id));
           const newJobs = parsedAdminJobs.filter((p) => !existingIds.has(p.id));
           baseList = [...newJobs, ...baseList];
-        }
-      }
-
-      const savedReports = localStorage.getItem('majo_completed_reports');
-      if (savedReports) {
-        const parsedReports = JSON.parse(savedReports);
-        if (Array.isArray(parsedReports) && parsedReports.length > 0) {
-          baseList = applyCompletedReports(baseList, parsedReports);
         }
       }
 
@@ -240,40 +232,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    const unsubscribeProgress = subscribeToJobProgressFromFirestore(
+      currentUser?.portalAddress || '',
+      (snapshots) => {
+        if (cancelled) return;
+        setPmList((previous) => applyJobProgress(previous, snapshots));
+      },
+      () => {
+        // Keep the last known progress when the live connection is interrupted.
+      }
+    );
     Promise.all([
-      loadAdminJobsFromFirestore(),
-      loadCompletedReportsFromFirestore(),
-      loadJobProgressFromFirestore(),
-      loadRegisteredAccountsFromFirestore(),
-      loadPortalConfigFromFirestore(),
-    ]).then(([cloudJobs, cloudReports, progressSnapshots, accounts, cloudPortalConfig]) => {
-      if (!cancelled && cloudJobs.length > 0) {
-        let uniqueCloudJobs = deduplicateJobs(cloudJobs);
-        const localReports = (() => {
-          try {
-            const raw = localStorage.getItem('majo_completed_reports');
-            return raw ? (JSON.parse(raw) as Record<string, unknown>[]) : [];
-          } catch {
-            return [];
-          }
-        })();
-        uniqueCloudJobs = applyCompletedReports(uniqueCloudJobs, [...cloudReports, ...localReports]);
+      loadJobsForPortalFromFirestore(currentUser?.portalAddress || ''),
+      loadJobProgressFromFirestore(currentUser?.portalAddress || ''),
+      loadRegisteredAccountsFromFirestore(currentUser?.portalAddress || ''),
+    ]).then(([cloudJobs, progressSnapshots, accounts]) => {
+      if (!cancelled) {
+        let uniqueCloudJobs = deduplicateJobs(cloudJobs)
+          .filter((job) => !deletedJobIds.current.has(job.id))
+          .map((job) => {
+            if (job.createdBy !== currentUser?.uid) return job;
+            const locations = new Set(job.targetWilayahList || []);
+            const targetUserUids = accounts
+              .filter((account) => account.role === 'user' && account.uid && account.location && locations.has(account.location))
+              .map((account) => account.uid as string);
+            return { ...job, targetUserUids };
+          });
         uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots);
         setPmList(uniqueCloudJobs);
         setSelectedPmId(uniqueCloudJobs[0]?.id || '');
       }
       if (!cancelled) {
         setConnectedTechnicians(accounts.filter((account) => account.role === 'user').length);
-        const portalConfig = cloudPortalConfig || getPortalConfig();
-        setConfiguredRegions((portalConfig.masterGroups || []).map((group) => group.name));
+        const jobsToReconcileRecipients = cloudJobs.filter(
+          (job) => job.createdBy === currentUser?.uid && job.targetWilayahList?.length
+        );
+        void Promise.all(
+          jobsToReconcileRecipients.map((job) => assignExistingAdminJobToUsers(job, currentUser?.uid || '', accounts))
+        ).catch(() => {
+          // Existing jobs remain available to admins if recipient sync is denied.
+        });
       }
     }).catch(() => {
       // Local jobs remain available when Firestore is unavailable.
     });
     return () => {
       cancelled = true;
+      unsubscribeProgress();
     };
-  }, []);
+  }, [currentUser?.portalAddress, currentUser?.uid]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsPortalConfigLoading(true);
+    loadPortalConfigFromFirestore(currentUser?.portalAddress).then((cloudConfig) => {
+      if (cancelled) return;
+      const portalConfig = cloudConfig || getPortalConfig();
+      const hasLocation =
+        (portalConfig.masterWilayah || []).length > 0 ||
+        (portalConfig.masterGroups || []).some((group) => group.locations.length > 0);
+      setHasConfiguredLocation(hasLocation);
+      setConfiguredRegions((portalConfig.masterGroups || []).map((group) => group.name));
+    }).catch(() => {
+      if (cancelled) return;
+      const portalConfig = getPortalConfig();
+      const hasLocation =
+        portalConfig.masterWilayah.length > 0 ||
+        portalConfig.masterGroups.some((group) => group.locations.length > 0);
+      setHasConfiguredLocation(hasLocation);
+      setConfiguredRegions(portalConfig.masterGroups.map((group) => group.name));
+    }).finally(() => {
+      if (!cancelled) setIsPortalConfigLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.portalAddress]);
 
   const completedJobsCount = useMemo(
     () => pmList.filter((pm) => pm.progress >= 100).length,
@@ -306,7 +340,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [editEnd, setEditEnd] = useState('');
   const [editRegions, setEditRegions] = useState('');
   const [editPic, setEditPic] = useState('');
-  const [editModules, setEditModules] = useState<{ name: string; itemCount: number }[]>([]);
+  const [editModules, setEditModules] = useState<EditablePmModule[]>([]);
 
   // Delete verification
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
@@ -323,10 +357,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     icon: 'check_circle',
   });
   const [isExporting, setIsExporting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Notification dropdown
   const [showNotificationMenu, setShowNotificationMenu] = useState(false);
+  const notificationMenuRef = useRef<HTMLDivElement>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>(() => {
+    try {
+      const key = `majo_read_notifications_${currentUser?.uid || currentUser?.username || 'admin'}`;
+      const stored = localStorage.getItem(key);
+      const parsed = stored ? JSON.parse(stored) : [];
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const progressNotifications = useMemo(() => pmList.flatMap((job) =>
+    (job.fieldProgress || []).flatMap((progress) => {
+      const devices = Array.isArray(progress.devices) ? progress.devices : [];
+      return devices
+        .filter((device) => device.statusState === 'DONE')
+        .map((device) => ({
+          id: `${job.id}_${String(progress.userUid || '')}_${String(device.id || '')}`,
+          jobId: job.id,
+          jobTitle: job.title,
+          technicianName: String(progress.technicianName || 'Teknisi'),
+          location: String(device.location || progress.location || 'Lokasi tidak diketahui'),
+          taskTitle: String(device.taskTitle || 'Pekerjaan lapangan'),
+          updatedAt: String(progress.updatedAt || ''),
+        }));
+    })
+  ).sort((first, second) => second.updatedAt.localeCompare(first.updatedAt)), [pmList]);
+  const unreadNotificationCount = progressNotifications.filter((notification) => !readNotificationIds.includes(notification.id)).length;
+
+  useEffect(() => {
+    try {
+      const key = `majo_read_notifications_${currentUser?.uid || currentUser?.username || 'admin'}`;
+      localStorage.setItem(key, JSON.stringify(readNotificationIds));
+    } catch {
+      // Notification read state is optional when local storage is unavailable.
+    }
+  }, [currentUser?.uid, currentUser?.username, readNotificationIds]);
+
+  const markAllNotificationsRead = () => {
+    setReadNotificationIds(progressNotifications.map((notification) => notification.id));
+  };
+
+  useEffect(() => {
+    if (!showNotificationMenu) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !notificationMenuRef.current?.contains(event.target)) {
+        setShowNotificationMenu(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowNotificationMenu(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showNotificationMenu]);
+
+  const openProgressNotification = (notificationId: string, jobId: string) => {
+    setReadNotificationIds((previous) => previous.includes(notificationId) ? previous : [...previous, notificationId]);
+    const job = pmList.find((item) => item.id === jobId);
+    if (job) {
+      setModalTargetPm(job);
+      setIsMonitoringOpen(true);
+    }
+    setShowNotificationMenu(false);
+  };
 
   // Selected item computed
   const currentSelectedPm = useMemo(() => {
@@ -358,6 +463,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }, 3500);
   };
 
+  const handleRefreshAdminData = async () => {
+    setIsRefreshing(true);
+    try {
+      const [cloudJobs, progressSnapshots, accounts] = await Promise.all([
+        loadJobsForPortalFromFirestore(currentUser?.portalAddress || ''),
+        loadJobProgressFromFirestore(currentUser?.portalAddress || ''),
+        loadRegisteredAccountsFromFirestore(currentUser?.portalAddress || ''),
+      ]);
+      const refreshedJobs = deduplicateJobs(cloudJobs)
+        .filter((job) => !deletedJobIds.current.has(job.id))
+        .map((job) => {
+          if (job.createdBy !== currentUser?.uid) return job;
+          const locations = new Set(job.targetWilayahList || []);
+          const targetUserUids = accounts
+            .filter((account) => account.role === 'user' && account.uid && account.location && locations.has(account.location))
+            .map((account) => account.uid as string);
+          return { ...job, targetUserUids };
+        });
+      const nextJobs = applyJobProgress(refreshedJobs, progressSnapshots);
+      setPmList(nextJobs);
+      setSelectedPmId((selectedId) => nextJobs.some((job) => job.id === selectedId)
+        ? selectedId
+        : nextJobs[0]?.id || '');
+      setConnectedTechnicians(accounts.filter((account) => account.role === 'user').length);
+      triggerBottomToast('Data Disegarkan', 'Pekerjaan, progres, dan data teknisi berhasil dimuat ulang.');
+    } catch (error) {
+      triggerBottomToast(
+        'Gagal Memuat Data',
+        error instanceof Error ? error.message : 'Periksa koneksi dan aturan akses Firebase.',
+        'error'
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // Open Edit or Create Modal
   const handleOpenEditModal = (pm: PmItem | null, isNew = false) => {
     setIsCreatingNew(isNew);
@@ -374,10 +515,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEditEnd(formatDate(endDate));
       setEditRegions(regionNames.join(', '));
       setEditPic('');
-      setEditModules([
-        { name: 'Pemeriksaan Gardu & Transformator Induk', itemCount: 12 },
-        { name: 'Uji Arus Beban Puncak & Suhu Koneksi', itemCount: 8 },
-      ]);
+      setEditModules([]);
     } else {
       setModalTargetPm(pm);
       setEditTitle(pm.title);
@@ -385,26 +523,125 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEditEnd(pm.endDate);
       setEditRegions(pm.regions);
       setEditPic(pm.pic);
-      setEditModules(
-        pm.modules || [
-          { name: 'Pemeriksaan Fisik Gardu & Transformator Utama', itemCount: 18 },
-          { name: 'Panel Distribusi Tegangan Menengah (Cubicle 20kV)', itemCount: 14 },
-          { name: 'Sistem Proteksi & Grounding Earthing', itemCount: 12 },
-          { name: 'Fasilitas Proteksi Lingkungan & Baterai Catu Daya', itemCount: 12 },
-        ]
-      );
+      const existingModules = pm.modules || [];
+      setEditModules(existingModules.map((module, index) => {
+        const savedChecklist: ChecklistItem[] = module.checklist?.length
+          ? module.checklist
+          : [{
+              id: `legacy-${pm.id}-${index}`,
+              text: module.name,
+              hasPhoto: true,
+              hasCondition: true,
+              conditionText: 'Kondisi Petugas',
+              hasTimestamp: false,
+              hasNotes: false,
+              notesText: '',
+            }];
+        const checklist: EditableChecklistItem[] = savedChecklist.map((item) => ({
+          ...item,
+          conditionOptionsInput: (item.conditionOptions || []).join(', '),
+        }));
+        return {
+          ...createEditablePmModule(module.name, checklist),
+          id: `edit-${pm.id}-${index}`,
+        };
+      }));
     }
     setIsEditModalOpen(true);
   };
 
+  const handleAddEditModule = () => {
+    setEditModules((previous) => [...previous, createEditablePmModule()]);
+  };
+
+  const handleUpdateEditModule = (moduleId: string, updates: Partial<EditablePmModule>) => {
+    setEditModules((previous) => previous.map((module) =>
+      module.id === moduleId ? { ...module, ...updates } : module
+    ));
+  };
+
+  const handleAddEditChecklistItem = (moduleId: string) => {
+    const module = editModules.find((item) => item.id === moduleId);
+    if (!module) return;
+    const text = module.newItemText.trim();
+    if (!text) {
+      triggerBottomToast('Something To Do Kosong', 'Isi item checklist sebelum menambahkannya.', 'error');
+      return;
+    }
+    const conditionOptions = module.conditionOptionsInput
+      .split(',')
+      .map((option) => option.trim())
+      .filter(Boolean);
+    const checklistItem: ChecklistItem = {
+      id: `item-${crypto.randomUUID()}`,
+      text,
+      hasPhoto: module.hasPhoto,
+      hasCondition: module.hasCondition,
+      conditionOptions: module.hasCondition ? conditionOptions : [],
+      conditionText: module.hasCondition
+        ? conditionOptions.length ? `Kondisi: ${conditionOptions.join(' / ')}` : 'Kondisi Petugas'
+        : '',
+      hasTimestamp: module.hasTimestamp,
+      hasNotes: module.hasNotes,
+      notesText: module.hasNotes ? 'Catatan Petugas' : '',
+    };
+    handleUpdateEditModule(moduleId, {
+      checklist: [...module.checklist, {
+        ...checklistItem,
+        conditionOptionsInput: module.conditionOptionsInput,
+      }],
+      newItemText: '',
+      conditionOptionsInput: '',
+    });
+  };
+
+  const handleDeleteEditChecklistItem = (moduleId: string, itemId: string) => {
+    setEditModules((previous) => previous.map((module) => module.id === moduleId
+      ? { ...module, checklist: module.checklist.filter((item) => item.id !== itemId) }
+      : module
+    ));
+  };
+
+  const handleUpdateEditChecklistItem = (
+    moduleId: string,
+    itemId: string,
+    updates: Partial<EditableChecklistItem>
+  ) => {
+    setEditModules((previous) => previous.map((module) => module.id === moduleId
+      ? {
+          ...module,
+          checklist: module.checklist.map((item) => item.id === itemId ? { ...item, ...updates } : item),
+        }
+      : module
+    ));
+  };
+
   // Save Edit / Create PM
-  const handleSavePm = (e: React.FormEvent) => {
+  const handleSavePm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editTitle.trim()) return;
+    const modulesToSave = editModules.map((module) => ({
+      name: module.name.trim(),
+      itemCount: module.checklist.length,
+      checklist: module.checklist.map(({ conditionOptionsInput: _conditionOptionsInput, ...item }) => item),
+    }));
+    if (modulesToSave.length === 0 || modulesToSave.some((module) => !module.name || module.checklist.length === 0)) {
+      triggerBottomToast('Sub-Tugas Belum Lengkap', 'Setiap Sub-Tugas harus memiliki nama dan minimal satu Something To Do.', 'error');
+      return;
+    }
+    const totalChecklistItems = modulesToSave.reduce((count, module) => count + module.itemCount, 0);
 
     if (isCreatingNew) {
       const newId = `pm-row-${Date.now()}`;
       const newCode = `PM-2026-OCT-${String(pmList.length + 1).padStart(3, '0')}`;
+      const selectedRegions = editRegions.split(',').map((region) => region.trim()).filter(Boolean);
+      const portalConfig = getPortalConfig();
+      const targetWilayahList = selectedRegions.flatMap((region) => {
+        const matchingGroup = portalConfig.masterGroups.find(
+          (group) => group.name.toLowerCase() === region.toLowerCase()
+        );
+        return matchingGroup ? matchingGroup.locations : [region];
+      });
       const newPm: PmItem = {
         id: newId,
         code: newCode,
@@ -416,10 +653,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         picRole: 'Lead Teknisi Lapangan',
         progress: 0,
         doneCount: 0,
-        totalCount: editModules.reduce((acc, m) => acc + m.itemCount, 0) || 20,
-        pendingCount: editModules.reduce((acc, m) => acc + m.itemCount, 0) || 20,
+        totalCount: totalChecklistItems,
+        pendingCount: totalChecklistItems,
         subStationCount: 6,
         regions: editRegions.trim(),
+        targetWilayahList,
         regionsDetail: editRegions.split(',').map((r) => ({
           name: `${r.trim()} (Aktif)`,
           percent: '0%',
@@ -431,32 +669,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           activity: 'Penugasan baru telah dibuat dan siap didistribusikan.',
           time: 'Baru saja',
         },
-        modules: editModules,
+        modules: modulesToSave,
       };
+
+      try {
+        newPm.portalId = await saveAdminJobToFirestore(
+          newPm,
+          currentUser?.uid || '',
+          currentUser?.portalAddress || ''
+        ) || undefined;
+      } catch (error) {
+        triggerBottomToast(
+          'Pekerjaan Gagal Disimpan',
+          error instanceof Error ? error.message : 'Tidak dapat menyimpan pekerjaan ke portal.'
+        );
+        return;
+      }
 
       setPmList((prev) => [newPm, ...prev]);
       setSelectedPmId(newId);
       setIsEditModalOpen(false);
       triggerBottomToast('Pekerjaan PM Baru Berhasil Dibuat', `Penugasan ${newCode} telah tersimpan di sistem.`);
     } else if (modalTargetPm) {
-      setPmList((prev) =>
-        prev.map((item) =>
-          item.id === modalTargetPm.id
-            ? {
-                ...item,
-                title: editTitle.trim(),
-                startDate: editStart,
-                endDate: editEnd,
-                dates: `${editStart} - ${editEnd}`,
-                regions: editRegions.trim(),
-                pic: editPic,
-                modules: editModules,
-              }
-            : item
-        )
-      );
+      const selectedRegions = editRegions.split(',').map((region) => region.trim()).filter(Boolean);
+      const portalConfig = getPortalConfig();
+      const targetWilayahList = selectedRegions.flatMap((region) => {
+        const matchingGroup = portalConfig.masterGroups.find(
+          (group) => group.name.toLowerCase() === region.toLowerCase()
+        );
+        return matchingGroup ? matchingGroup.locations : [region];
+      });
+      const updatedPm: PmItem = {
+        ...modalTargetPm,
+        title: editTitle.trim(),
+        startDate: editStart,
+        endDate: editEnd,
+        dates: `${editStart} - ${editEnd}`,
+        regions: editRegions.trim(),
+        targetWilayahList,
+        pic: editPic,
+        modules: modulesToSave,
+        totalCount: totalChecklistItems,
+        pendingCount: Math.max(0, totalChecklistItems - modalTargetPm.doneCount),
+      };
+      try {
+        updatedPm.portalId = await saveAdminJobToFirestore(
+          updatedPm,
+          currentUser?.uid || '',
+          currentUser?.portalAddress || ''
+        ) || updatedPm.portalId;
+      } catch (error) {
+        triggerBottomToast(
+          'Konfigurasi Gagal Disimpan',
+          error instanceof Error ? error.message : 'Perubahan PM tidak dapat disimpan ke portal.',
+          'error'
+        );
+        return;
+      }
+      setPmList((previous) => previous.map((item) => item.id === updatedPm.id ? updatedPm : item));
       setIsEditModalOpen(false);
-      triggerBottomToast('Konfigurasi PM Berhasil Disimpan', 'Pembaruan tugas telah diterapkan dan disinkronkan.');
+      triggerBottomToast('Konfigurasi PM Berhasil Disimpan', 'Pembaruan Sub-Tugas dan Something To Do telah disinkronkan.');
     }
   };
 
@@ -468,17 +740,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Execute Delete
-  const handleExecuteDelete = () => {
+  const handleExecuteDelete = async () => {
     if (!modalTargetPm) return;
     const targetId = modalTargetPm.id;
-    const remaining = pmList.filter((item) => item.id !== targetId);
-    setPmList(remaining);
-    if (selectedPmId === targetId) {
-      setSelectedPmId(remaining[0]?.id || '');
+    try {
+      await deleteAdminJobFromFirestore(
+        modalTargetPm,
+        currentUser?.portalAddress || ''
+      );
+      deletedJobIds.current.add(targetId);
+      const remaining = pmList.filter((item) => item.id !== targetId);
+      setPmList(remaining);
+      if (selectedPmId === targetId) {
+        setSelectedPmId(remaining[0]?.id || '');
+      }
+      try {
+        const saved = localStorage.getItem('majo_admin_created_jobs');
+        const cachedJobs = saved ? JSON.parse(saved) : [];
+        if (Array.isArray(cachedJobs)) {
+          localStorage.setItem(
+            'majo_admin_created_jobs',
+            JSON.stringify(cachedJobs.filter((job: PmItem) => job.id !== targetId))
+          );
+        }
+      } catch {
+        // The Firestore deletion remains authoritative if local cache cleanup fails.
+      }
+      setIsDeleteModalOpen(false);
+      setModalTargetPm(null);
+      triggerBottomToast('Pekerjaan Berhasil Dihapus', 'Data pekerjaan PM telah dihapus dari portal.', 'delete');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gagal menghapus pekerjaan dari Firebase.';
+      triggerBottomToast('Penghapusan Gagal', message, 'delete');
     }
-    setIsDeleteModalOpen(false);
-    setModalTargetPm(null);
-    triggerBottomToast('Pekerjaan Berhasil Dihapus', 'Data pekerjaan PM telah dihapus permanen dari server MAJO.', 'delete');
   };
 
   // Export a formatted XLSX workbook with summary and verification tables.
@@ -520,7 +814,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <img
                   alt="MAJO Logo"
                   className="w-full h-full object-contain"
-                  src="/assets/logo%20MAJO.png"
+                  src="/assets/Logo%20MAJO.png"
                   referrerPolicy="no-referrer"
                 />
               </div>
@@ -604,7 +898,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-tertiary text-[18px]">verified_user</span>
-            <span className="font-body-sm text-body-sm text-on-surface font-medium">Passkey Active</span>
+            <span className="font-body-sm text-body-sm text-on-surface font-medium">Firebase Authentication</span>
           </div>
         </div>
       </aside>
@@ -624,32 +918,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low border border-outline-variant/20">
               <span className="inline-block w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
               <span className="font-label-sm text-label-sm text-on-surface-variant font-medium">
-                Encrypted Node
+                Portal Operasional
               </span>
             </div>
 
             {/* Notification Bell */}
-            <div className="relative">
+            <div className="relative" ref={notificationMenuRef}>
               <button
-                aria-label="Notifications"
+                aria-label={`Notifikasi${unreadNotificationCount > 0 ? `, ${unreadNotificationCount} belum dibaca` : ''}`}
                 className="relative p-2 rounded-full hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer"
                 type="button"
                 onClick={() => setShowNotificationMenu(!showNotificationMenu)}
               >
                 <span className="material-symbols-outlined text-[22px]">notifications</span>
+                {unreadNotificationCount > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-error px-1 text-[9px] font-bold text-on-error">
+                    {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                  </span>
+                )}
               </button>
 
               {showNotificationMenu && (
-                <div className="absolute right-0 mt-2 w-72 bg-surface-container-lowest rounded-xl shadow-xl border border-outline-variant/30 p-3 z-50 animate-in fade-in">
-                  <div className="flex items-center justify-between pb-2 border-b border-outline-variant/20">
-                    <span className="text-xs font-bold text-on-surface">Pemberitahuan Sistem</span>
-                    <span className="text-[10px] text-secondary font-semibold">Status</span>
-                  </div>
-                  <div className="py-2 space-y-2">
-                    <div className="p-2 rounded-lg bg-surface-container-low text-xs">
-                      <p className="font-semibold text-on-surface">{pmList.length} pekerjaan terdaftar</p>
-                      <p className="text-secondary text-[11px]">{completedJobsCount} selesai, {inProgressJobsCount} berjalan.</p>
+                <div className="absolute right-0 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-outline-variant/30 bg-surface-container-lowest shadow-xl z-50 animate-in fade-in">
+                  <div className="flex items-center justify-between gap-3 border-b border-outline-variant/20 p-3">
+                    <div>
+                      <p className="text-sm font-bold text-on-surface">Notifikasi Progres PM</p>
+                      <p className="text-[11px] text-secondary">Pembaruan tugas dari teknisi lapangan</p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={markAllNotificationsRead}
+                      disabled={unreadNotificationCount === 0}
+                      className="shrink-0 text-[11px] font-semibold text-primary hover:underline disabled:cursor-default disabled:text-outline disabled:no-underline"
+                    >
+                      Tandai dibaca
+                    </button>
+                  </div>
+                  <div className="max-h-[min(28rem,65vh)] overflow-y-auto p-2">
+                    {progressNotifications.length > 0 ? (
+                      <div className="space-y-1">
+                        {progressNotifications.slice(0, 30).map((notification) => {
+                          const isUnread = !readNotificationIds.includes(notification.id);
+                          return (
+                            <button
+                              key={notification.id}
+                              type="button"
+                              onClick={() => openProgressNotification(notification.id, notification.jobId)}
+                              className={`w-full rounded-lg p-3 text-left transition-colors hover:bg-surface-container-low ${isUnread ? 'bg-primary/5' : 'bg-transparent'}`}
+                            >
+                              <div className="flex items-start gap-2.5">
+                                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${isUnread ? 'bg-primary' : 'bg-transparent'}`} />
+                                <span className="material-symbols-outlined text-[18px] text-emerald-600">task_alt</span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-xs font-semibold text-on-surface">
+                                    {notification.technicianName} menyelesaikan {notification.taskTitle}
+                                  </span>
+                                  <span className="mt-1 block truncate text-[11px] text-secondary">
+                                    {notification.jobTitle} · {notification.location}
+                                  </span>
+                                  <span className="mt-1 block text-[10px] text-outline">
+                                    {notification.updatedAt ? new Date(notification.updatedAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'}
+                                  </span>
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="p-6 text-center">
+                        <span className="material-symbols-outlined text-2xl text-outline">notifications_off</span>
+                        <p className="mt-2 text-xs font-semibold text-secondary">Belum ada pembaruan progres dari teknisi.</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -712,12 +1053,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {activeNav === 'create-jobs' ? (
             <CreateJobsView
               onNavigateToDashboard={() => setActiveNav('dashboard')}
-              onJobCreated={(newPm) => {
+              onJobCreated={async (newPm) => {
+                newPm.portalId = await saveAdminJobToFirestore(
+                  newPm,
+                  currentUser?.uid || '',
+                  currentUser?.portalAddress || ''
+                ) || undefined;
                 setPmList((prev) => {
                   const updated = [newPm, ...prev];
-                  void saveAdminJobToFirestore(newPm, currentUser?.username).catch(() => {
-                    // localStorage remains the fallback when cloud persistence fails.
-                  });
                   try {
                     const saved = localStorage.getItem('majo_admin_created_jobs');
                     const existing = saved ? JSON.parse(saved) : [];
@@ -739,12 +1082,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <LinkPortalView
               onNavigateToDashboard={() => setActiveNav('dashboard')}
               onNavigateToCreateJobs={() => setActiveNav('create-jobs')}
-              onConfigurationCompleted={() => {
+              onConfigurationUpdated={() => {
                 const config = getPortalConfig();
                 const hasLocation = config.masterWilayah.length > 0 || config.masterGroups.some((group) => group.locations.length > 0);
-                setIsPortalConfigured(Boolean(config.isActivated && hasLocation));
                 setHasConfiguredLocation(hasLocation);
-                setShowWarningBanner(!(config.isActivated && hasLocation));
               }}
             />
           ) : activeNav === 'pengaturan-profile' ? (
@@ -803,7 +1144,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
             {/* Warning Banner (Displayed when in initialization mode or toggled) */}
-            {showWarningBanner && (!isPortalConfigured || !hasConfiguredLocation) && (
+            {!isPortalConfigLoading && !hasConfiguredLocation && (
               <div className="p-4 rounded-DEFAULT bg-surface-container-lowest border border-tertiary/40 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-in fade-in">
                 <div className="flex items-start gap-3.5">
                   <div className="p-2 rounded-lg bg-tertiary-fixed/40 text-tertiary shrink-0 mt-0.5">
@@ -819,7 +1160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </span>
                     </div>
                     <p className="text-body-sm text-secondary mt-0.5">
-                      Anda belum dapat membagikan tautan pendaftaran. Lengkapi Link Portal dan tambahkan minimal satu lokasi operasional terlebih dahulu agar tautan staf terbuka.
+                      Tambahkan minimal satu lokasi operasional ke wilayah portal agar tautan pendaftaran staf dapat digunakan.
                     </p>
                   </div>
                 </div>
@@ -999,14 +1340,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     <button
+                      disabled={isRefreshing}
                       className="p-2 rounded-DEFAULT bg-surface-container-lowest hover:bg-surface-container border border-outline-variant/30 text-secondary transition-colors cursor-pointer"
-                      onClick={() => {
-                        triggerBottomToast('Data Disegarkan', 'Pembaruan data checklist lapangan berhasil disinkronkan.');
-                      }}
+                      onClick={handleRefreshAdminData}
                       title="Segarkan Data"
                       type="button"
                     >
-                      <span className="material-symbols-outlined text-[18px]">refresh</span>
+                      <span className={`material-symbols-outlined text-[18px] ${isRefreshing ? 'animate-spin' : ''}`}>refresh</span>
                     </button>
                   </div>
                 </div>
@@ -1641,87 +1981,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </span>
               </div>
 
-              {/* Task Checklist Matrix */}
-              <div className="space-y-3">
-                <div className="p-4 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex items-start gap-3">
-                    <span className="p-2 rounded-full bg-primary/10 text-primary mt-0.5">
-                      <span className="material-symbols-outlined text-[20px]">check_circle</span>
-                    </span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-label-md text-label-md text-on-surface font-bold">
-                          {modalTargetPm.modules?.[0]?.name || 'Belum ada checklist'}
-                        </h4>
-                        <span className="px-2 py-0.5 rounded bg-primary/15 text-primary text-[11px] font-bold uppercase">
-                          {modalTargetPm.progress >= 100 ? 'Selesai' : 'Berjalan'}
-                        </span>
-                      </div>
-                      <p className="font-body-sm text-body-sm text-secondary mt-1">
-                        Wilayah: <strong>{modalTargetPm.regions || 'Belum ditentukan'}</strong> • PIC Pelaksana: <strong>{modalTargetPm.pic || 'Belum ditentukan'}</strong>
-                      </p>
-                      <div className="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant font-medium">
-                        <span className="flex items-center gap-1 text-primary">
-                          <span className="material-symbols-outlined text-[16px]">checklist</span> {modalTargetPm.modules?.[0]?.itemCount || 0} Item Checklist
-                        </span>
-                        <span>•</span>
-                        <span>Progres: {modalTargetPm.progress}%</span>
-                        <span>•</span>
-                        <span className="text-secondary">{modalTargetPm.recentLog?.time || 'Belum ada aktivitas'}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      triggerBottomToast('Data Checklist', 'Rincian foto hanya tersedia jika dikirim dalam laporan teknisi.')
-                    }
-                    className="px-3 py-1.5 rounded-DEFAULT bg-surface-container text-on-surface hover:bg-surface-container-high text-label-sm font-semibold flex items-center gap-1 self-start md:self-auto transition-colors cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">image</span>
-                    <span>Lihat Bukti Foto</span>
-                  </button>
-                </div>
+              <div className="space-y-4">
+                {(modalTargetPm.modules || []).map((module, moduleIndex) => {
+                  const checklistItems = module.checklist?.length
+                    ? module.checklist
+                    : [{
+                        id: `module-${moduleIndex}`,
+                        text: module.name,
+                        hasPhoto: false,
+                        hasCondition: false,
+                        conditionText: '',
+                        hasTimestamp: false,
+                        notesText: '',
+                      }];
+                  const responses: Record<string, unknown>[] = (modalTargetPm.fieldProgress || []).flatMap((progress) => {
+                    const devices = Array.isArray(progress.devices)
+                      ? progress.devices as Record<string, unknown>[]
+                      : [];
+                    return devices.map((device) => ({
+                      ...device,
+                      location: String(device.location || progress.location || ''),
+                    } as Record<string, unknown>));
+                  });
 
-                <div className="p-4 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex items-start gap-3">
-                    <span className="p-2 rounded-full bg-primary/10 text-primary mt-0.5">
-                      <span className="material-symbols-outlined text-[20px]">check_circle</span>
-                    </span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-label-md text-label-md text-on-surface font-bold">
-                          {modalTargetPm.modules?.[1]?.name || 'Checklist tambahan belum tersedia'}
-                        </h4>
-                        <span className="px-2 py-0.5 rounded bg-primary/15 text-primary text-[11px] font-bold uppercase">
-                          {modalTargetPm.progress >= 100 ? 'Selesai' : 'Berjalan'}
+                  return (
+                    <section key={`${module.name}-${moduleIndex}`} className="space-y-3">
+                      <div className="flex items-center justify-between border-b border-outline-variant/20 pb-2">
+                        <div>
+                          <h4 className="font-label-md text-on-surface font-bold">{moduleIndex + 1}. {module.name}</h4>
+                          <p className="text-xs text-secondary">{checklistItems.length} Something To Do</p>
+                        </div>
+                        <span className="rounded bg-surface-container px-2 py-1 text-[11px] font-semibold text-secondary">
+                          Sub-Tugas
                         </span>
                       </div>
-                      <p className="font-body-sm text-body-sm text-secondary mt-1">
-                        Wilayah: <strong>{modalTargetPm.regions || 'Belum ditentukan'}</strong> • PIC Pelaksana: <strong>{modalTargetPm.pic || 'Belum ditentukan'}</strong>
-                      </p>
-                      <div className="flex items-center gap-3 mt-2 text-[12px] text-on-surface-variant font-medium">
-                        <span className="flex items-center gap-1 text-primary">
-                          <span className="material-symbols-outlined text-[16px]">checklist</span> {modalTargetPm.modules?.[1]?.itemCount || 0} Item Checklist
-                        </span>
-                        <span>•</span>
-                        <span>Progres: {modalTargetPm.progress}%</span>
-                        <span>•</span>
-                        <span className="text-secondary">{modalTargetPm.recentLog?.time || 'Belum ada aktivitas'}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      triggerBottomToast('Data Checklist', 'Rincian foto hanya tersedia jika dikirim dalam laporan teknisi.')
-                    }
-                    className="px-3 py-1.5 rounded-DEFAULT bg-surface-container text-on-surface hover:bg-surface-container-high text-label-sm font-semibold flex items-center gap-1 self-start md:self-auto transition-colors cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">image</span>
-                    <span>Lihat Bukti Foto</span>
-                  </button>
-                </div>
+
+                      {checklistItems.map((item, itemIndex) => {
+                        const itemResponses = responses.filter((response) =>
+                          String(response.taskTitle || '') === item.text
+                        );
+                        return (
+                          <article key={item.id || `${moduleIndex}-${itemIndex}`} className="rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="font-label-md text-on-surface font-semibold">{itemIndex + 1}. {item.text}</p>
+                                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                                  {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-0.5">Foto</span>}
+                                  {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-0.5">{item.conditionText || 'Kondisi'}</span>}
+                                  {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Waktu &amp; GPS</span>}
+                                  {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-0.5">Keterangan</span>}
+                                </div>
+                              </div>
+                              <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${itemResponses.some((response) => response.statusState === 'DONE') ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+                                {itemResponses.some((response) => response.statusState === 'DONE') ? 'Sudah dikerjakan' : 'Menunggu respons'}
+                              </span>
+                            </div>
+
+                            {itemResponses.length > 0 ? (
+                              <div className="mt-3 grid gap-2">
+                                {itemResponses.map((response, responseIndex) => {
+                                  const formData = response.formData && typeof response.formData === 'object'
+                                    ? response.formData as Record<string, unknown>
+                                    : {};
+                                  return (
+                                    <div key={`${String(response.location)}-${responseIndex}`} className="rounded-lg bg-surface-container-low p-3 text-xs text-secondary">
+                                      <div className="flex flex-wrap justify-between gap-2 font-semibold text-on-surface">
+                                        <span>{String(response.location || 'Lokasi belum ditentukan')}</span>
+                                        <span>{response.statusState === 'DONE' ? 'Selesai' : 'Belum selesai'}</span>
+                                      </div>
+                                      {formData.status && <p className="mt-1">Kondisi: {String(formData.status)}</p>}
+                                      {formData.keterangan && <p className="mt-1">Keterangan: {String(formData.keterangan)}</p>}
+                                      {formData.durasi && <p className="mt-1">Durasi: {String(formData.durasi)} menit</p>}
+                                      {formData.photoName && <p className="mt-1">Foto: {String(formData.photoName)}</p>}
+                                      {formData.capturedAt && <p className="mt-1">Waktu: {new Date(String(formData.capturedAt)).toLocaleString('id-ID')}</p>}
+                                      {typeof formData.latitude === 'number' && typeof formData.longitude === 'number' && (
+                                        <p className="mt-1">GPS: {formData.latitude.toFixed(6)}, {formData.longitude.toFixed(6)}</p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="mt-3 text-xs text-secondary">Belum ada respons teknisi untuk Something To Do ini.</p>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </section>
+                  );
+                })}
               </div>
             </div>
 
@@ -1812,26 +2160,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Sub-checklists */}
               <div className="space-y-3">
-                <h4 className="font-label-lg text-label-lg text-on-surface font-bold flex items-center gap-2">
-                  <span className="material-symbols-outlined text-primary text-[20px]">format_list_bulleted</span>
-                  <span>Daftar Modul & Sub-Tugas Terdaftar ({modalTargetPm.modules?.length || 4} Kategori)</span>
-                </h4>
-                <div className="border border-outline-variant/30 rounded-DEFAULT divide-y divide-outline-variant/20 overflow-hidden">
-                  {(modalTargetPm.modules || []).map((mod, idx) => (
-                    <div key={idx} className="p-4 bg-surface-container-lowest">
-                      <div className="flex items-center justify-between">
-                        <span className="font-label-md font-bold text-on-surface">
-                          {idx + 1}. {mod.name}
-                        </span>
-                        <span className="px-2 py-0.5 rounded bg-surface-container text-secondary text-[11px] font-semibold">
-                          {mod.itemCount} Checklist
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="flex items-center gap-2 font-label-lg text-label-lg font-bold text-on-surface">
+                    <span className="material-symbols-outlined text-[20px] text-primary">format_list_bulleted</span>
+                    <span>Sub-Tugas &amp; Something To Do</span>
+                  </h4>
+                  <span className="rounded bg-surface-container px-2 py-1 text-[11px] font-semibold text-secondary">
+                    {modalTargetPm.modules?.length || 0} Sub-Tugas · {modalTargetPm.modules?.reduce((total, module) => total + (module.checklist?.length || module.itemCount || 0), 0) || 0} item
+                  </span>
                 </div>
+                {(modalTargetPm.modules || []).length > 0 ? (
+                  <div className="space-y-3">
+                    {(modalTargetPm.modules || []).map((module, moduleIndex) => {
+                      const checklist = module.checklist?.length
+                        ? module.checklist
+                        : [{
+                            id: `legacy-${moduleIndex}`,
+                            text: module.name,
+                            hasPhoto: false,
+                            hasCondition: false,
+                            conditionOptions: [],
+                            conditionText: '',
+                            hasTimestamp: false,
+                            hasNotes: false,
+                            notesText: '',
+                          }];
+                      return (
+                        <section key={`${module.name}-${moduleIndex}`} className="overflow-hidden rounded-DEFAULT border border-outline-variant/30">
+                          <div className="flex items-center justify-between gap-3 bg-surface-container-low px-4 py-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-container text-xs font-bold text-on-surface-variant">{moduleIndex + 1}</span>
+                              <h5 className="truncate font-label-md text-label-md font-bold text-on-surface">{module.name}</h5>
+                            </div>
+                            <span className="shrink-0 rounded bg-surface-container px-2 py-1 text-[11px] font-semibold text-secondary">
+                              {checklist.length} Something To Do
+                            </span>
+                          </div>
+                          <div className="divide-y divide-outline-variant/20 bg-surface-container-lowest">
+                            {checklist.map((item, itemIndex) => {
+                              const conditionSummary = item.conditionOptions?.length
+                                ? item.conditionOptions.join(', ')
+                                : item.conditionText.replace(/^Kondisi:\s*/i, '') || 'Aktif';
+                              return (
+                                <div key={item.id || `${moduleIndex}-${itemIndex}`} className="flex items-start gap-3 p-4">
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">{itemIndex + 1}</span>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-label-md text-label-md font-semibold text-on-surface">{item.text}</p>
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                      {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Foto wajib</span>}
+                                      {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-1 text-[10px] font-medium text-on-secondary-fixed">Kondisi: {conditionSummary}</span>}
+                                      {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Tanggal, waktu &amp; GPS</span>}
+                                      {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-1 text-[10px] font-medium text-on-tertiary-fixed">Keterangan petugas</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-dashed border-outline-variant/40 p-5 text-center text-sm text-secondary">Belum ada Sub-Tugas untuk job ini.</p>
+                )}
               </div>
             </div>
 
@@ -1963,61 +2356,166 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Dynamic Modules list */}
-              <div className="space-y-3 pt-2 border-t border-outline-variant/20">
-                <div className="flex items-center justify-between">
+              <div className="space-y-4 border-t border-outline-variant/20 pt-4">
+                <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h4 className="font-label-lg text-label-lg text-on-surface font-bold">
-                      Rincian Modul Pekerjaan & Sub-Tugas
-                    </h4>
-                    <p className="font-body-sm text-body-sm text-secondary">
-                      Tambah atau kurangi modul tugas inspeksi preventif.
-                    </p>
+                    <h4 className="font-label-lg text-on-surface font-bold">Sub-Tugas &amp; Something To Do</h4>
+                    <p className="text-sm text-secondary">Susun grup pekerjaan dan item checklist beserta respons petugas.</p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setEditModules([...editModules, { name: 'Modul Baru Inspeksi', itemCount: 8 }]);
-                    }}
-                    className="px-3 py-1.5 rounded-DEFAULT bg-primary/10 text-primary hover:bg-primary/20 font-label-sm text-label-sm font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                    onClick={handleAddEditModule}
+                    className="flex shrink-0 items-center gap-1 rounded-lg bg-primary/10 px-3 py-2 text-sm font-semibold text-primary hover:bg-primary/20"
                   >
-                    <span className="material-symbols-outlined text-[16px]">add</span>
-                    <span>Tambah Modul Job</span>
+                    <span className="material-symbols-outlined text-[18px]">add</span>
+                    Tambah Sub-Tugas
                   </button>
                 </div>
 
-                <div className="space-y-2.5">
-                  {editModules.map((mod, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center gap-2 p-3 rounded-DEFAULT bg-surface-container-low border border-outline-variant/30"
-                    >
-                      <span className="material-symbols-outlined text-outline text-[18px]">drag_indicator</span>
-                      <input
-                        type="text"
-                        value={mod.name}
-                        onChange={(e) => {
-                          const updated = [...editModules];
-                          updated[idx].name = e.target.value;
-                          setEditModules(updated);
-                        }}
-                        className="flex-1 bg-surface-container-lowest px-3 py-1.5 rounded border border-outline-variant/30 text-body-md text-on-surface focus:border-primary outline-none"
-                        required
-                      />
-                      <span className="text-body-sm text-secondary whitespace-nowrap">{mod.itemCount} Item</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditModules(editModules.filter((_, i) => i !== idx));
-                        }}
-                        className="p-1.5 rounded text-outline hover:text-error hover:bg-error-container/40 transition-colors cursor-pointer"
-                        title="Hapus modul ini"
-                      >
-                        <span className="material-symbols-outlined text-[18px]">delete</span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                {editModules.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-outline-variant/50 p-5 text-center text-sm text-secondary">
+                    Belum ada Sub-Tugas. Tambahkan satu, lalu isi Something To Do di dalamnya.
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {editModules.map((module, moduleIndex) => (
+                      <section key={module.id} className="space-y-3 rounded-xl border border-outline-variant/30 bg-surface-container-low p-4">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-container text-xs font-bold text-on-surface-variant">{moduleIndex + 1}</span>
+                          <input
+                            aria-label={`Nama Sub-Tugas ${moduleIndex + 1}`}
+                            className="min-w-0 flex-1 rounded-lg border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 font-semibold text-on-surface outline-none focus:border-primary"
+                            placeholder="Nama Sub-Tugas"
+                            required
+                            value={module.name}
+                            onChange={(event) => handleUpdateEditModule(module.id, { name: event.target.value })}
+                          />
+                          <span className="whitespace-nowrap text-xs text-secondary">{module.checklist.length} item</span>
+                          <button
+                            aria-label={`Hapus Sub-Tugas ${moduleIndex + 1}`}
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-outline hover:bg-error-container hover:text-error"
+                            onClick={() => setEditModules((previous) => previous.filter((item) => item.id !== module.id))}
+                            type="button"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                          </button>
+                        </div>
+
+                        {module.checklist.length > 0 && (
+                          <div className="space-y-3 pl-4 sm:pl-9">
+                            {module.checklist.map((item, itemIndex) => (
+                              <article key={item.id} className="space-y-3 rounded-lg border border-outline-variant/30 bg-surface-container-lowest p-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-secondary">{itemIndex + 1}.</span>
+                                  <input
+                                    aria-label={`Something To Do ${moduleIndex + 1}.${itemIndex + 1}`}
+                                    className="min-w-0 flex-1 rounded-md border border-outline-variant/30 bg-white px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                                    placeholder="Something To Do"
+                                    required
+                                    value={item.text}
+                                    onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { text: event.target.value })}
+                                  />
+                                  <button
+                                    aria-label={`Hapus Something To Do ${itemIndex + 1}`}
+                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-outline hover:bg-error-container hover:text-error"
+                                    onClick={() => handleDeleteEditChecklistItem(module.id, item.id)}
+                                    type="button"
+                                  >
+                                    <span className="material-symbols-outlined text-[17px]">close</span>
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                  <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                                    <input type="checkbox" checked={item.hasPhoto} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasPhoto: event.target.checked })} />
+                                    Foto wajib
+                                  </label>
+                                  <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                                    <input type="checkbox" checked={item.hasCondition ?? false} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasCondition: event.target.checked })} />
+                                    Pilihan kondisi
+                                  </label>
+                                  <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                                    <input type="checkbox" checked={item.hasTimestamp} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasTimestamp: event.target.checked })} />
+                                    Tanggal, waktu &amp; GPS
+                                  </label>
+                                  <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                                    <input type="checkbox" checked={item.hasNotes ?? false} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasNotes: event.target.checked })} />
+                                    Keterangan petugas
+                                  </label>
+                                </div>
+                                {item.hasCondition && (
+                                  <input
+                                    aria-label={`Opsi kondisi ${moduleIndex + 1}.${itemIndex + 1}`}
+                                    className="w-full rounded-md border border-outline-variant/30 bg-white px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
+                                    placeholder="Opsi kondisi, pisahkan dengan koma: Normal, Rusak"
+                                    value={item.conditionOptionsInput}
+                                    onChange={(event) => {
+                                      const conditionOptionsInput = event.target.value;
+                                      const conditionOptions = conditionOptionsInput.split(',').map((option) => option.trim()).filter(Boolean);
+                                      handleUpdateEditChecklistItem(module.id, item.id, {
+                                        conditionOptionsInput,
+                                        conditionOptions,
+                                        conditionText: conditionOptions.length ? `Kondisi: ${conditionOptions.join(' / ')}` : 'Kondisi Petugas',
+                                      });
+                                    }}
+                                  />
+                                )}
+                              </article>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="space-y-2 border-t border-outline-variant/30 pt-3 sm:ml-9">
+                          <div className="flex items-center gap-2">
+                            <input
+                              aria-label={`Something To Do baru untuk Sub-Tugas ${moduleIndex + 1}`}
+                              className="min-w-0 flex-1 rounded-lg border border-outline-variant/30 bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none focus:border-primary"
+                              placeholder="Something To Do"
+                              value={module.newItemText}
+                              onChange={(event) => handleUpdateEditModule(module.id, { newItemText: event.target.value })}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  handleAddEditChecklistItem(module.id);
+                                }
+                              }}
+                            />
+                            <button
+                              aria-label={`Tambah Something To Do ke Sub-Tugas ${moduleIndex + 1}`}
+                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary hover:bg-primary-container"
+                              onClick={() => handleAddEditChecklistItem(module.id)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">add</span>
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                              <input type="checkbox" checked={module.hasPhoto} onChange={(event) => handleUpdateEditModule(module.id, { hasPhoto: event.target.checked })} /> Foto wajib untuk item baru
+                            </label>
+                            <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                              <input type="checkbox" checked={module.hasCondition} onChange={(event) => handleUpdateEditModule(module.id, { hasCondition: event.target.checked })} /> Pilihan kondisi
+                            </label>
+                            <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                              <input type="checkbox" checked={module.hasTimestamp} onChange={(event) => handleUpdateEditModule(module.id, { hasTimestamp: event.target.checked })} /> Tanggal, waktu &amp; GPS
+                            </label>
+                            <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                              <input type="checkbox" checked={module.hasNotes} onChange={(event) => handleUpdateEditModule(module.id, { hasNotes: event.target.checked })} /> Keterangan petugas
+                            </label>
+                          </div>
+                          {module.hasCondition && (
+                            <input
+                              aria-label={`Opsi kondisi default Sub-Tugas ${moduleIndex + 1}`}
+                              className="w-full rounded-md border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
+                              placeholder="Opsi kondisi untuk item baru, pisahkan dengan koma"
+                              value={module.conditionOptionsInput}
+                              onChange={(event) => handleUpdateEditModule(module.id, { conditionOptionsInput: event.target.value })}
+                            />
+                          )}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Submit Buttons */}

@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ChecklistItem, PmItem, RegionConfig } from '../types';
-import { getPortalConfig, PM_TYPE_DEFINITIONS, PmTypeKey } from '../services/workflowStore';
+import { ChecklistItem, ConditionLogicRange, PmItem, RegionConfig } from '../types';
+import { getPortalConfig } from '../services/workflowStore';
 import { loadPortalConfigFromFirestore } from '../services/firestoreStore';
 
 interface CreateJobsViewProps {
   onNavigateToDashboard: () => void;
-  onJobCreated?: (newPm: PmItem) => void;
+  onJobCreated?: (newPm: PmItem) => void | Promise<void>;
 }
 
 interface Branch {
@@ -13,11 +13,25 @@ interface Branch {
   name: string;
   regionKey: 'sor1' | 'sor2';
   checked: boolean;
+  subLocations: BranchSubLocation[];
+}
+
+interface BranchSubLocation {
+  id: string;
+  name: string;
+  checked: boolean;
+  places: Array<{ id: string; name: string; checked: boolean }>;
+}
+
+interface SubtaskGroup {
+  id: string;
+  title: string;
+  items: ChecklistItem[];
 }
 
 const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
 
-const INITIAL_ITEMS: ChecklistItem[] = [];
+const INITIAL_SUBTASKS: SubtaskGroup[] = [];
 const INITIAL_BRANCHES: Branch[] = [];
 
 const mapConfigToBranches = (config?: { masterWilayah?: string[]; masterGroups?: RegionConfig[] }): Branch[] => {
@@ -30,14 +44,32 @@ const mapConfigToBranches = (config?: { masterWilayah?: string[]; masterGroups?:
       : [];
 
   return groups.flatMap((group, groupIndex) =>
-    group.locations.map((location, locationIndex) => ({
-      id: `${group.id || `group-${groupIndex}`}-${locationIndex}`,
-      name: location,
-      regionKey: `sor${Math.min(groupIndex + 1, 2)}` as 'sor1' | 'sor2',
-      checked: true,
-    }))
+    group.locations.map((location, locationIndex) => {
+      const subLocations = (group.locationHierarchy?.[location] || []).map((subLocation) => ({
+        id: subLocation.id,
+        name: subLocation.name,
+        checked: true,
+        places: (subLocation.places || []).map((place, placeIndex) => ({
+          id: `${subLocation.id}-place-${placeIndex}`,
+          name: place,
+          checked: true,
+        })),
+      }));
+      return {
+        id: `${group.id || `group-${groupIndex}`}-${locationIndex}`,
+        name: location,
+        regionKey: `sor${Math.min(groupIndex + 1, 2)}` as 'sor1' | 'sor2',
+        checked: true,
+        subLocations,
+      };
+    })
   );
 };
+
+const hasBranchSelection = (branch: Branch) =>
+  branch.checked || branch.subLocations.some((subLocation) =>
+    subLocation.checked || subLocation.places.some((place) => place.checked)
+  );
 
 export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   onNavigateToDashboard,
@@ -47,20 +79,26 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const [jobTitle, setJobTitle] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [dateType, setDateType] = useState<'single' | 'range'>('range');
   const [slaEnabled, setSlaEnabled] = useState(true);
-  const [conditionOptions, setConditionOptions] = useState<string[]>([]);
-  const [items, setItems] = useState<ChecklistItem[]>(INITIAL_ITEMS);
+  const [subtasks, setSubtasks] = useState<SubtaskGroup[]>(INITIAL_SUBTASKS);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [activeSubtaskId, setActiveSubtaskId] = useState('');
   const [branches, setBranches] = useState<Branch[]>(INITIAL_BRANCHES);
   const [regionNames, setRegionNames] = useState<string[]>([]);
 
   // New item form state
   const [newItemText, setNewItemText] = useState('');
-  const [newItemPmType, setNewItemPmType] = useState<PmTypeKey>('suhu_ruangan');
+  const [conditionOptions, setConditionOptions] = useState<string[]>([]);
+  const [newConditionOption, setNewConditionOption] = useState('');
+  const [logicRanges, setLogicRanges] = useState<ConditionLogicRange[]>([]);
+  const [newLogicRange, setNewLogicRange] = useState({ min: '', max: '', output: '' });
   const [togglePhoto, setTogglePhoto] = useState(true);
   const [toggleCondition, setToggleCondition] = useState(true);
+  const [toggleLogicCondition, setToggleLogicCondition] = useState(false);
   const [toggleTimestamp, setToggleTimestamp] = useState(true);
   const [toggleNotes, setToggleNotes] = useState(false);
+  const allChecklistItems = subtasks.flatMap((subtask) => subtask.items);
+  const activeSubtask = subtasks.find((subtask) => subtask.id === activeSubtaskId) || subtasks[0];
 
   useEffect(() => {
     let cancelled = false;
@@ -90,8 +128,6 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   }, []);
 
   // Modals state
-  const [isConditionsModalOpen, setIsConditionsModalOpen] = useState(false);
-  const [tempConditionInput, setTempConditionInput] = useState('');
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [isPublishSuccessOpen, setIsPublishSuccessOpen] = useState(false);
@@ -112,7 +148,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
 
   // Date calculation
   const durationText = useMemo(() => {
-    if (!slaEnabled) return 'Tanpa Tenggat Waktu / Fleksibel';
+    if (!slaEnabled) return 'Tanggal Tunggal / Fleksibel';
     if (!startDate || !endDate) return 'Tanggal belum ditentukan';
     const d1 = new Date(startDate);
     const d2 = new Date(endDate);
@@ -123,7 +159,9 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   }, [startDate, endDate, slaEnabled]);
 
   const footerDeadlineText = useMemo(() => {
-    if (!slaEnabled) return 'Target Deadline: Fleksibel / Terbuka (Tanpa Batas Waktu Kunci)';
+    if (!slaEnabled) {
+      return `Tanggal Pelaksanaan: ${startDate || 'Belum ditentukan'} (Single Date, tanpa SLA)`;
+    }
     if (!endDate) return 'Target Deadline: Belum ditentukan';
     const d2 = new Date(endDate);
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
@@ -135,49 +173,99 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const sor1Branches = useMemo(() => branches.filter((b) => b.regionKey === 'sor1'), [branches]);
   const sor2Branches = useMemo(() => branches.filter((b) => b.regionKey === 'sor2'), [branches]);
 
-  const sor1CheckedCount = useMemo(() => sor1Branches.filter((b) => b.checked).length, [sor1Branches]);
-  const sor2CheckedCount = useMemo(() => sor2Branches.filter((b) => b.checked).length, [sor2Branches]);
-  const totalCheckedCount = useMemo(() => branches.filter((b) => b.checked).length, [branches]);
+  const sor1CheckedCount = useMemo(() => sor1Branches.filter(hasBranchSelection).length, [sor1Branches]);
+  const sor2CheckedCount = useMemo(() => sor2Branches.filter(hasBranchSelection).length, [sor2Branches]);
+  const totalCheckedCount = useMemo(() => branches.filter(hasBranchSelection).length, [branches]);
 
   const activeRegionsCount = useMemo(() => {
-    return new Set(branches.filter((branch) => branch.checked).map((branch) => branch.regionKey)).size;
+    return new Set(branches.filter(hasBranchSelection).map((branch) => branch.regionKey)).size;
   }, [branches]);
 
   // Master Checkbox states
-  const isAllChecked = totalCheckedCount === branches.length && branches.length > 0;
-  const isAllIndeterminate = totalCheckedCount > 0 && totalCheckedCount < branches.length;
+  const isAllChecked = branches.length > 0 && branches.every((branch) => branch.checked);
+  const isAllIndeterminate = totalCheckedCount > 0 && !isAllChecked;
 
-  const isSor1AllChecked = sor1CheckedCount === sor1Branches.length && sor1Branches.length > 0;
-  const isSor1Indeterminate = sor1CheckedCount > 0 && sor1CheckedCount < sor1Branches.length;
+  const isSor1AllChecked = sor1Branches.length > 0 && sor1Branches.every((branch) => branch.checked);
+  const isSor1Indeterminate = sor1CheckedCount > 0 && !isSor1AllChecked;
 
-  const isSor2AllChecked = sor2CheckedCount === sor2Branches.length && sor2Branches.length > 0;
-  const isSor2Indeterminate = sor2CheckedCount > 0 && sor2CheckedCount < sor2Branches.length;
+  const isSor2AllChecked = sor2Branches.length > 0 && sor2Branches.every((branch) => branch.checked);
+  const isSor2Indeterminate = sor2CheckedCount > 0 && !isSor2AllChecked;
 
   // Toggle Branch Single
-  const handleToggleBranch = (branchId: string) => {
+  const handleToggleBranch = (branchId: string, checked: boolean) => {
     setBranches((prev) =>
-      prev.map((b) => (b.id === branchId ? { ...b, checked: !b.checked } : b))
+      prev.map((branch) => branch.id === branchId ? {
+        ...branch,
+        checked,
+        subLocations: branch.subLocations.map((subLocation) => ({
+          ...subLocation,
+          checked,
+          places: subLocation.places.map((place) => ({ ...place, checked })),
+        })),
+      } : branch)
     );
+  };
+
+  const handleToggleSubLocation = (branchId: string, subLocationId: string, checked: boolean) => {
+    setBranches((prev) => prev.map((branch) => {
+      if (branch.id !== branchId) return branch;
+      const subLocations = branch.subLocations.map((subLocation) => subLocation.id === subLocationId
+        ? {
+          ...subLocation,
+          checked,
+          places: subLocation.places.map((place) => ({ ...place, checked })),
+        }
+        : subLocation);
+      return { ...branch, checked: subLocations.every((subLocation) => subLocation.checked), subLocations };
+    }));
+  };
+
+  const handleTogglePlace = (branchId: string, subLocationId: string, placeId: string, checked: boolean) => {
+    setBranches((prev) => prev.map((branch) => {
+      if (branch.id !== branchId) return branch;
+      const subLocations = branch.subLocations.map((subLocation) => {
+        if (subLocation.id !== subLocationId) return subLocation;
+        const places = subLocation.places.map((place) => place.id === placeId ? { ...place, checked } : place);
+        return { ...subLocation, checked: places.length > 0 && places.every((place) => place.checked), places };
+      });
+      return { ...branch, checked: subLocations.every((subLocation) => subLocation.checked), subLocations };
+    }));
   };
 
   // Toggle Region SOR
   const handleToggleRegion = (regionKey: 'sor1' | 'sor2', checked: boolean) => {
     setBranches((prev) =>
-      prev.map((b) => (b.regionKey === regionKey ? { ...b, checked } : b))
+      prev.map((branch) => branch.regionKey === regionKey ? {
+        ...branch,
+        checked,
+        subLocations: branch.subLocations.map((subLocation) => ({
+          ...subLocation,
+          checked,
+          places: subLocation.places.map((place) => ({ ...place, checked })),
+        })),
+      } : branch)
     );
     showToast(
-      `${regionKey.toUpperCase()}: ${checked ? 'Semua cabang dipilih' : 'Semua cabang dibatalkan'}`,
+      `${regionKey.toUpperCase()}: ${checked ? 'Semua area dipilih' : 'Semua area dibatalkan'}`,
       'info'
     );
   };
 
   // Toggle All Branches
   const handleToggleAllBranches = (checked: boolean) => {
-    setBranches((prev) => prev.map((b) => ({ ...b, checked })));
+    setBranches((prev) => prev.map((branch) => ({
+      ...branch,
+      checked,
+      subLocations: branch.subLocations.map((subLocation) => ({
+        ...subLocation,
+        checked,
+        places: subLocation.places.map((place) => ({ ...place, checked })),
+      })),
+    })));
     showToast(
       checked
-        ? 'Semua wilayah & titik lokasi telah dipilih'
-        : 'Pilihan titik lokasi cabang dibersihkan',
+        ? 'Semua area pekerjaan telah dipilih'
+        : 'Pilihan area pekerjaan dibersihkan',
       'info'
     );
   };
@@ -186,9 +274,10 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const handleToggleSla = (enabled: boolean) => {
     setSlaEnabled(enabled);
     if (enabled) {
+      if (!endDate && startDate) setEndDate(startDate);
       showToast('Batas Waktu Pelaksanaan Tugas: Diaktifkan (Kunci 23:59 WIB)', 'info');
     } else {
-      showToast('Batas Waktu Pelaksanaan Tugas dinonaktifkan (Fleksibel)', 'info');
+      showToast('Mode tanggal tunggal diaktifkan (tanpa tenggat waktu)', 'info');
     }
   };
 
@@ -196,7 +285,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const handleDateChange = (type: 'start' | 'end', val: string) => {
     if (type === 'start') {
       setStartDate(val);
-      if (new Date(endDate) < new Date(val)) {
+      if (slaEnabled && (!endDate || endDate < val)) {
         setEndDate(val);
       }
     } else {
@@ -210,50 +299,133 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   };
 
   // Delete Checklist Item
-  const handleDeleteItem = (itemId: string) => {
-    setItems((prev) => prev.filter((i) => i.id !== itemId));
-    showToast('Item checklist telah dihapus.', 'info');
+  const handleAddSubtask = () => {
+    const trimmed = newSubtaskTitle.trim();
+    if (!trimmed) {
+      showToast('Isi nama Sub-Tugas terlebih dahulu.', 'error');
+      return;
+    }
+    const subtask: SubtaskGroup = {
+      id: `subtask-${crypto.randomUUID()}`,
+      title: trimmed,
+      items: [],
+    };
+    setSubtasks((previous) => [...previous, subtask]);
+    setActiveSubtaskId(subtask.id);
+    setNewSubtaskTitle('');
+    setConditionOptions([]);
+    setNewConditionOption('');
+    setLogicRanges([]);
+    setNewLogicRange({ min: '', max: '', output: '' });
+    setToggleCondition(false);
+    setToggleLogicCondition(false);
+    showToast('Sub-Tugas dibuat. Tambahkan Something To Do ke dalamnya.');
+  };
+
+  const handleDeleteSubtask = (subtaskId: string) => {
+    setSubtasks((previous) => {
+      const remaining = previous.filter((subtask) => subtask.id !== subtaskId);
+      if (activeSubtaskId === subtaskId) setActiveSubtaskId(remaining[0]?.id || '');
+      return remaining;
+    });
+    showToast('Sub-Tugas dan item di dalamnya dihapus.', 'info');
+  };
+
+  const handleDeleteItem = (subtaskId: string, itemId: string) => {
+    setSubtasks((previous) => previous.map((subtask) =>
+      subtask.id === subtaskId
+        ? { ...subtask, items: subtask.items.filter((item) => item.id !== itemId) }
+        : subtask
+    ));
+    showToast('Something To Do dihapus.', 'info');
+  };
+
+  const handleAddConditionOption = () => {
+    const option = newConditionOption.trim();
+    if (!option) return;
+    if (conditionOptions.some((existing) => existing.toLowerCase() === option.toLowerCase())) {
+      showToast(`Pilihan kondisi "${option}" sudah ada.`, 'error');
+      return;
+    }
+    setConditionOptions((previous) => [...previous, option]);
+    setNewConditionOption('');
+  };
+
+  const handleAddLogicRange = () => {
+    const min = Number(newLogicRange.min);
+    const max = Number(newLogicRange.max);
+    const output = newLogicRange.output.trim();
+    if (newLogicRange.min === '' || newLogicRange.max === '' || !Number.isFinite(min) || !Number.isFinite(max) || min > max || !output) {
+      showToast('Isi nilai Min, Max, dan Output yang valid.', 'error');
+      return;
+    }
+    if (logicRanges.some((range) => min <= range.max && max >= range.min)) {
+      showToast('Rentang baru beririsan dengan rentang yang sudah ada.', 'error');
+      return;
+    }
+    const nextRanges = [...logicRanges, {
+      id: `logic-${crypto.randomUUID()}`,
+      min,
+      max,
+      output,
+    }].sort((first, second) => first.min - second.min);
+    setLogicRanges(nextRanges);
+    setNewLogicRange({ min: '', max: '', output: '' });
   };
 
   // Add Checklist Item
   const handleAddNewChecklist = () => {
-    const trimmed = newItemText.trim();
-    if (!trimmed) {
-      showToast('Ketik nama sub-tugas terlebih dahulu.', 'error');
+    if (!activeSubtask) {
+      showToast('Buat atau pilih Sub-Tugas terlebih dahulu.', 'error');
       return;
     }
-
+    const trimmed = newItemText.trim();
+    if (!trimmed) {
+      showToast('Isi Something To Do terlebih dahulu.', 'error');
+      return;
+    }
+    if (toggleCondition && conditionOptions.length === 0) {
+      showToast('Tambahkan minimal satu Pilihan Kondisi.', 'error');
+      return;
+    }
+    if (toggleLogicCondition && logicRanges.length === 0) {
+      showToast('Tambahkan minimal satu Rentang Logika Kondisi.', 'error');
+      return;
+    }
     const newItem: ChecklistItem = {
-      id: `item-${Date.now()}`,
+      id: `item-${crypto.randomUUID()}`,
       text: trimmed,
-      pmType: newItemPmType,
       hasPhoto: togglePhoto,
-      conditionText: toggleCondition ? `Kondisi: ${conditionOptions.join(' / ')}` : '',
+      hasCondition: toggleCondition || toggleLogicCondition,
+      conditionMode: toggleCondition && toggleLogicCondition
+        ? 'both'
+        : toggleLogicCondition
+          ? 'logic'
+          : toggleCondition
+            ? 'options'
+            : undefined,
+      conditionOptions: toggleCondition ? conditionOptions : [],
+      conditionLogic: toggleLogicCondition ? logicRanges : [],
+      conditionText: [
+        toggleCondition ? `Kondisi: ${conditionOptions.join(' / ')}` : '',
+        toggleLogicCondition ? `Logic Kondisi (${logicRanges.length} rentang)` : '',
+      ].filter(Boolean).join(' · '),
       hasTimestamp: toggleTimestamp,
-      notesText: toggleNotes ? 'Catatan Tambahan' : '',
+      hasNotes: toggleNotes,
+      notesText: toggleNotes ? 'Catatan Petugas' : '',
     };
 
-    setItems((prev) => [...prev, newItem]);
+    setSubtasks((previous) => previous.map((subtask) =>
+      subtask.id === activeSubtask.id
+        ? { ...subtask, items: [...subtask.items, newItem] }
+        : subtask
+    ));
     setNewItemText('');
-    showToast('Sub-tugas berhasil ditambahkan ke daftar checklist!');
-  };
-
-  // Conditions Dialog
-  const handleOpenConditionsDialog = () => {
-    setTempConditionInput(conditionOptions.join(', '));
-    setIsConditionsModalOpen(true);
-  };
-
-  const handleSaveConditions = () => {
-    const parsed = tempConditionInput
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (parsed.length > 0) {
-      setConditionOptions(parsed);
-      showToast('Opsi pilihan kondisi diperbarui.');
-    }
-    setIsConditionsModalOpen(false);
+    setConditionOptions([]);
+    setNewConditionOption('');
+    setLogicRanges([]);
+    setNewLogicRange({ min: '', max: '', output: '' });
+    showToast('Something To Do ditambahkan ke Sub-Tugas.');
   };
 
   // Reset Form
@@ -261,13 +433,19 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     setJobTitle('');
     setStartDate('');
     setEndDate('');
-    setDateType('range');
     setSlaEnabled(true);
     const config = getPortalConfig();
     setBranches(mapConfigToBranches(config));
     setRegionNames((config.masterGroups || []).map((group) => group.name));
-    setItems(INITIAL_ITEMS);
+    setSubtasks(INITIAL_SUBTASKS);
+    setNewSubtaskTitle('');
+    setActiveSubtaskId('');
     setConditionOptions([]);
+    setNewConditionOption('');
+    setLogicRanges([]);
+    setNewLogicRange({ min: '', max: '', output: '' });
+    setToggleCondition(true);
+    setToggleLogicCondition(false);
     setIsResetModalOpen(false);
     showToast('Formulir berhasil direset ke pengaturan default.', 'info');
   };
@@ -278,46 +456,72 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       showToast('Harap isi Judul Utama Pekerjaan (Job Title)!', 'error');
       return;
     }
-    if (totalCheckedCount === 0) {
-      showToast('Pilih minimal 1 titik cabang target wilayah!', 'error');
+    if (!startDate) {
+      showToast('Pilih tanggal pelaksanaan pekerjaan terlebih dahulu.', 'error');
       return;
     }
-    if (items.length === 0) {
-      showToast('Susun minimal 1 item sub-tugas checklist teknisi!', 'error');
+    if (slaEnabled && !endDate) {
+      showToast('Pilih tanggal berakhir untuk rentang jadwal pekerjaan.', 'error');
+      return;
+    }
+    if (totalCheckedCount === 0) {
+      showToast('Pilih minimal 1 area pekerjaan!', 'error');
+      return;
+    }
+    if (allChecklistItems.length === 0) {
+      showToast('Tambahkan minimal satu Something To Do ke dalam Sub-Tugas.', 'error');
       return;
     }
 
     setIsPublishSuccessOpen(true);
   };
 
-  const handleConfirmPublish = () => {
-    setIsPublishSuccessOpen(false);
-    showToast('Pekerjaan baru telah diluncurkan ke portal!', 'success');
+  const handleConfirmPublish = async () => {
 
     // Create PM item to sync back to dashboard list
     if (onJobCreated) {
-      const selectedBranchNames = branches.filter((b) => b.checked).map((b) => b.name.split('–')[0].trim());
+      const selectedBranches = branches.filter(hasBranchSelection);
+      const selectedBranchNames = selectedBranches.map((branch) => branch.name);
+      const targetAreaDetails = selectedBranches.map((branch) => ({
+        location: branch.name,
+        subLocations: branch.subLocations
+          .filter((subLocation) => subLocation.checked || subLocation.places.some((place) => place.checked))
+          .map((subLocation) => ({
+            name: subLocation.name,
+            places: subLocation.places.filter((place) => place.checked).map((place) => place.name),
+          })),
+      }));
+      const selectedAreaLabels = targetAreaDetails.flatMap((location) =>
+        location.subLocations.length > 0
+          ? location.subLocations.flatMap((subLocation) =>
+            subLocation.places.length > 0
+              ? subLocation.places.map((place) => `${location.location} / ${subLocation.name} / ${place}`)
+              : [`${location.location} / ${subLocation.name}`]
+          )
+          : [location.location]
+      );
       const newPm: PmItem = {
         id: `pm-${Date.now()}`,
         code: `PM-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`,
         title: jobTitle.trim(),
-        dates: `${startDate} - ${endDate}`,
+        dates: slaEnabled ? `${startDate} - ${endDate}` : startDate,
         startDate: startDate,
-        endDate: endDate,
-        dateType,
-        singleDate: dateType === 'single' ? startDate : undefined,
+        endDate: slaEnabled ? endDate : startDate,
+        dateType: slaEnabled ? 'range' : 'single',
+        ...(!slaEnabled ? { singleDate: startDate } : {}),
         areaType: 'wilayah',
-        targetArea: selectedBranchNames.join(', '),
+        targetArea: selectedAreaLabels.join(', '),
         targetWilayahList: selectedBranchNames,
+        targetAreaDetails,
         pic: '',
         picRole: '',
         progress: 0,
         doneCount: 0,
-        totalCount: items.length,
-        pendingCount: items.length,
+        totalCount: allChecklistItems.length,
+        pendingCount: allChecklistItems.length,
         subStationCount: totalCheckedCount,
-        regions: selectedBranchNames.join(', '),
-        regionsDetail: selectedBranchNames.map((name) => ({
+        regions: selectedAreaLabels.join(', '),
+        regionsDetail: selectedAreaLabels.map((name) => ({
           name: `${name} (Aktif)`,
           percent: '0%',
           color: 'bg-primary',
@@ -328,18 +532,79 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
           activity: 'Pekerjaan baru siap diakses tim teknisi.',
           time: 'Baru saja',
         },
-        modules: items.map((i) => ({
-          name: i.text,
-          itemCount: 1,
-          pmType: i.pmType,
-          checklist: [i],
+        modules: subtasks.filter((subtask) => subtask.items.length > 0).map((subtask) => ({
+          name: subtask.title,
+          itemCount: subtask.items.length,
+          checklist: subtask.items,
         })),
       };
-      onJobCreated(newPm);
+      try {
+        await onJobCreated(newPm);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Pekerjaan gagal disimpan ke portal.', 'error');
+        return;
+      }
     }
 
+    setIsPublishSuccessOpen(false);
+    showToast('Pekerjaan baru telah diluncurkan ke portal!', 'success');
     onNavigateToDashboard();
   };
+
+  const renderBranch = (branch: Branch) => (
+    <div key={branch.id} className="flex flex-col gap-2">
+      <label className="flex items-center gap-2.5 text-on-surface cursor-pointer select-none hover:text-primary transition-colors">
+        <input
+          type="checkbox"
+          checked={branch.checked}
+          ref={(element) => {
+            if (element) element.indeterminate = !branch.checked && hasBranchSelection(branch);
+          }}
+          onChange={(event) => handleToggleBranch(branch.id, event.target.checked)}
+          className="accent-primary w-4 h-4 rounded cursor-pointer"
+        />
+        <span className="font-body-md text-body-md font-medium">{branch.name}</span>
+      </label>
+      {branch.subLocations.length > 0 && (
+        <div className="ml-6 flex flex-col gap-2 border-l-2 border-outline-variant/30 pl-3">
+          {branch.subLocations.map((subLocation) => {
+            const hasSelection = subLocation.checked || subLocation.places.some((place) => place.checked);
+            return (
+              <div key={subLocation.id} className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 text-on-surface-variant cursor-pointer select-none hover:text-primary">
+                  <input
+                    type="checkbox"
+                    checked={subLocation.checked}
+                    ref={(element) => {
+                      if (element) element.indeterminate = !subLocation.checked && hasSelection;
+                    }}
+                    onChange={(event) => handleToggleSubLocation(branch.id, subLocation.id, event.target.checked)}
+                    className="accent-primary w-4 h-4 rounded cursor-pointer"
+                  />
+                  <span className="font-body-sm text-body-sm">{subLocation.name}</span>
+                </label>
+                {subLocation.places.length > 0 && (
+                  <div className="ml-6 flex flex-col gap-2 border-l border-outline-variant/30 pl-3">
+                    {subLocation.places.map((place) => (
+                      <label key={place.id} className="flex items-center gap-2 text-secondary cursor-pointer select-none hover:text-primary">
+                        <input
+                          type="checkbox"
+                          checked={place.checked}
+                          onChange={(event) => handleTogglePlace(branch.id, subLocation.id, place.id, event.target.checked)}
+                          className="accent-primary w-4 h-4 rounded cursor-pointer"
+                        />
+                        <span className="font-body-sm text-body-sm">{place.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex flex-col w-full min-h-screen relative">
@@ -366,62 +631,6 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       {/* ========================================================================= */}
       {/* MODALS */}
       {/* ========================================================================= */}
-      {/* Edit Conditions Modal */}
-      {isConditionsModalOpen && (
-        <div className="fixed inset-0 z-[9000] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-surface-container-lowest rounded-xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-4 border border-outline-variant/30 animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                  <span className="material-symbols-outlined text-[24px]">tune</span>
-                </div>
-                <h3 className="font-headline-md text-headline-md text-on-surface">Konfigurasi Pilihan Kondisi</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsConditionsModalOpen(false)}
-                className="p-1 rounded-full text-secondary hover:bg-surface-container hover:text-on-surface cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-[20px]">close</span>
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-3">
-              <p className="font-body-sm text-secondary">
-                Masukkan opsi status kondisi yang dapat dipilih oleh teknisi saat verifikasi (pisahkan dengan koma):
-              </p>
-              <input
-                type="text"
-                value={tempConditionInput}
-                onChange={(e) => setTempConditionInput(e.target.value)}
-                placeholder="Normal, Tidak Normal, Anomali"
-                className="w-full px-4 py-2.5 rounded-DEFAULT bg-surface-container-low border border-outline-variant text-on-surface font-body-md outline-none focus:border-primary"
-              />
-              <span className="text-label-sm text-secondary">
-                Contoh: Normal, Tidak Normal atau Baik, Rusak Ringan, Gagal
-              </span>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-outline-variant/20">
-              <button
-                type="button"
-                onClick={() => setIsConditionsModalOpen(false)}
-                className="px-4 py-2 rounded-DEFAULT text-secondary hover:bg-surface-container font-label-md text-label-md cursor-pointer"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveConditions}
-                className="px-5 py-2 rounded-DEFAULT bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container shadow cursor-pointer"
-              >
-                Simpan Pilihan
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Reset Form Modal */}
       {isResetModalOpen && (
         <div className="fixed inset-0 z-[9000] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
@@ -443,7 +652,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
             </div>
 
             <p className="font-body-md text-body-md text-secondary">
-              Apakah Anda yakin ingin mengembalikan seluruh input formulir, target wilayah, dan susunan checklist ke
+              Apakah Anda yakin ingin mengembalikan seluruh input formulir, area pekerjaan, dan susunan checklist ke
               kondisi semula?
             </p>
 
@@ -543,14 +752,16 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   <strong>Judul:</strong> {jobTitle}
                 </p>
                 <p>
-                  <strong>Alokasi Sasaran:</strong> {totalCheckedCount} Titik Cabang Terpilih
+                  <strong>Alokasi Sasaran:</strong> {totalCheckedCount} Lokasi Terpilih
                 </p>
                 <p>
-                  <strong>Tenggat Waktu:</strong>{' '}
-                  {slaEnabled ? `${endDate} (SLA Terkunci 23:59 WIB)` : 'Fleksibel (Tanpa Tenggat Waktu)'}
+                  <strong>Jadwal:</strong>{' '}
+                  {slaEnabled
+                    ? `${startDate} - ${endDate} (SLA Terkunci 23:59 WIB)`
+                    : `${startDate} (Single Date, tanpa SLA)`}
                 </p>
                 <p>
-                  <strong>Total Checklist:</strong> {items.length} Sub-Tugas Terdefinisi
+                  <strong>Total Checklist:</strong> {subtasks.length} Sub-Tugas, {allChecklistItems.length} Something To Do
                 </p>
                 <p>
                   <strong>Status:</strong> Terpublikasi ke Portal Lapangan (Active Sync)
@@ -594,7 +805,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
               Buat Pekerjaan Baru (Create Jobs)
             </h1>
             <p className="font-body-md text-body-md text-secondary max-w-3xl">
-              Rancang instrumen inspeksi preventif, tentukan rentang jadwal operasional, alokasikan ke wilayah/titik cabang sasaran, dan susun kriteria checklist teknisi.
+              Rancang instrumen inspeksi preventif, tentukan rentang jadwal operasional, pilih area pekerjaan hingga Tempat, dan susun kriteria checklist teknisi.
             </p>
           </div>
         </div>
@@ -655,7 +866,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     <span className="material-symbols-outlined text-[20px]">calendar_month</span>
                   </div>
                   <span className="font-headline-md text-headline-md text-on-surface font-bold">
-                    Rentang Jadwal Pelaksanaan
+                    {slaEnabled ? 'Rentang Jadwal Pelaksanaan' : 'Tanggal Pelaksanaan'}
                   </span>
                 </div>
                 <span
@@ -670,14 +881,14 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid ${slaEnabled ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
                 {/* Tanggal Mulai */}
                 <div className="flex flex-col gap-1.5">
                   <label
                     className="font-label-sm text-label-sm text-secondary cursor-pointer"
                     htmlFor="job-start-date"
                   >
-                    Tanggal Mulai
+                    {slaEnabled ? 'Tanggal Mulai' : 'Tanggal Pelaksanaan'}
                   </label>
                   <div className="flex items-center gap-2 px-3 py-2 rounded-DEFAULT bg-surface-container-low text-on-surface font-body-md text-body-md focus-within:ring-1 focus-within:ring-primary transition-all border border-outline-variant/20">
                     <span className="material-symbols-outlined text-outline text-[18px]">event</span>
@@ -692,7 +903,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 </div>
 
                 {/* Tanggal Berakhir */}
-                <div className="flex flex-col gap-1.5" id="end-date-container">
+                {slaEnabled && <div className="flex flex-col gap-1.5" id="end-date-container">
                   <label
                     className="font-label-sm text-label-sm text-secondary cursor-pointer"
                     htmlFor="job-end-date"
@@ -700,25 +911,18 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     Tanggal Berakhir
                   </label>
                   <div
-                    className={`flex items-center gap-2 px-3 py-2 rounded-DEFAULT text-on-surface font-body-md text-body-md transition-all border border-outline-variant/20 ${
-                      slaEnabled
-                        ? 'bg-surface-container-low focus-within:ring-1 focus-within:ring-primary'
-                        : 'opacity-40 pointer-events-none bg-surface-container-high'
-                    }`}
+                    className="flex items-center gap-2 px-3 py-2 rounded-DEFAULT bg-surface-container-low text-on-surface font-body-md text-body-md transition-all border border-outline-variant/20 focus-within:ring-1 focus-within:ring-primary"
                   >
                     <span className="material-symbols-outlined text-outline text-[18px]">event_available</span>
                     <input
                       id="job-end-date"
-                      disabled={!slaEnabled && dateType === 'range'}
-                      className={`bg-transparent border-none outline-none w-full text-on-surface font-body-md ${
-                        slaEnabled && dateType === 'range' ? 'cursor-pointer' : 'cursor-not-allowed'
-                      }`}
+                      className="bg-transparent border-none outline-none w-full text-on-surface font-body-md cursor-pointer"
                       type="date"
-                      value={dateType === 'single' ? startDate : endDate}
+                      value={endDate}
                       onChange={(e) => handleDateChange('end', e.target.value)}
                     />
                   </div>
-                </div>
+                </div>}
               </div>
 
               {/* Interactive Toggle for SLA Compliance */}
@@ -731,7 +935,9 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     Batas Waktu Pelaksanaan Tugas
                   </span>
                   <span className="font-body-sm text-body-sm text-secondary">
-                    Kunci formulir otomatis setelah jam 23:59 WIB pada tanggal berakhir
+                    {slaEnabled
+                      ? 'Kunci formulir otomatis setelah jam 23:59 WIB pada tanggal berakhir'
+                      : 'Gunakan satu tanggal pelaksanaan tanpa batas waktu terkunci'}
                   </span>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
@@ -763,10 +969,10 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   </div>
                   <div className="flex flex-col">
                     <span className="font-headline-md text-headline-md text-on-surface font-bold">
-                      Target Wilayah &amp; Lokasi
+                      Area yang diberikan pekerjaan
                     </span>
                     <span className="font-body-sm text-body-sm text-secondary">
-                      Alokasikan Penugasan ke Titik Sasaran
+                      Pilih wilayah, lokasi, Sub Lokasi, dan Tempat sasaran
                     </span>
                   </div>
                 </div>
@@ -774,7 +980,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   className="px-2.5 py-1 rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-sm font-bold"
                   id="branch-counter"
                 >
-                  {totalCheckedCount} Titik Cabang Terpilih
+                  {totalCheckedCount} Lokasi Terpilih
                 </span>
               </div>
 
@@ -791,7 +997,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     }}
                     onChange={(e) => handleToggleAllBranches(e.target.checked)}
                   />
-                  <span>Tugaskan ke Semua Wilayah &amp; Lokasi</span>
+                  <span>Pilih semua area pekerjaan</span>
                 </label>
                 <div className="flex items-center gap-2">
                   <button
@@ -836,24 +1042,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                       className="px-2 py-0.5 rounded bg-surface-container-lowest text-secondary font-label-sm text-label-sm font-medium"
                       id="sor1-count"
                     >
-                      {sor1CheckedCount} / {sor1Branches.length} Cabang
+                      {sor1CheckedCount} / {sor1Branches.length} Lokasi
                     </span>
                   </div>
                   <div className="flex flex-col p-3 gap-2.5 pl-8 bg-surface-container-lowest/40">
-                    {sor1Branches.map((branch) => (
-                      <label
-                        key={branch.id}
-                        className="flex items-center gap-2.5 text-on-surface cursor-pointer select-none hover:text-primary transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={branch.checked}
-                          onChange={() => handleToggleBranch(branch.id)}
-                          className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        />
-                        <span className="font-body-md text-body-md">{branch.name}</span>
-                      </label>
-                    ))}
+                    {sor1Branches.map(renderBranch)}
                   </div>
                 </div>
 
@@ -879,31 +1072,18 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                       className="px-2 py-0.5 rounded bg-surface-container-lowest text-secondary font-label-sm text-label-sm font-medium"
                       id="sor2-count"
                     >
-                      {sor2CheckedCount} / {sor2Branches.length} Cabang
+                      {sor2CheckedCount} / {sor2Branches.length} Lokasi
                     </span>
                   </div>
                   <div className="flex flex-col p-3 gap-2.5 pl-8 bg-surface-container-lowest/40">
-                    {sor2Branches.map((branch) => (
-                      <label
-                        key={branch.id}
-                        className="flex items-center gap-2.5 text-on-surface cursor-pointer select-none hover:text-primary transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={branch.checked}
-                          onChange={() => handleToggleBranch(branch.id)}
-                          className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        />
-                        <span className="font-body-md text-body-md">{branch.name}</span>
-                      </label>
-                    ))}
+                    {sor2Branches.map(renderBranch)}
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 pt-1 text-secondary font-body-sm text-body-sm">
                 <span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
-                <span>Penugasan akan didistribusikan ke setiap titik lokasi yang dicentang.</span>
+                <span>Sub Lokasi dan Tempat yang dipilih ikut dicatat sebagai area pekerjaan.</span>
               </div>
             </div>
           </div>
@@ -933,213 +1113,206 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     className="px-3 py-1 rounded-full bg-surface-container text-on-surface-variant font-label-sm text-label-sm font-semibold"
                     id="task-count-badge"
                   >
-                    {items.length} Sub-Tugas Checklist
+                    {subtasks.length} Sub-Tugas · {allChecklistItems.length} Something To Do
                   </span>
                 </div>
               </div>
 
-              {/* Dynamic Flat Container for Tasks */}
-              <div className="flex flex-col gap-3" id="tasks-container">
-                {items.length === 0 ? (
-                  <div className="p-8 text-center text-secondary font-body-md bg-surface-container-low/50 rounded-DEFAULT border border-dashed border-outline-variant flex flex-col items-center justify-center gap-2">
-                    <span className="material-symbols-outlined text-outline text-[32px]">playlist_add</span>
-                    <span className="font-semibold text-on-surface">Belum ada item checklist inspeksi.</span>
-                    <span className="text-body-sm text-secondary">
-                      Tuliskan nama sub-tugas dan aturan respon melalui form di bawah, lalu klik 'Tambahkan Sub-Tugas ke Checklist'.
-                    </span>
-                  </div>
-                ) : (
-                  items.map((item, index) => (
-                    <div
-                      key={item.id}
-                      id={item.id}
-                      className="job-item-card flex items-start justify-between gap-4 p-4 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 shadow-xs hover:shadow transition-all duration-200"
+              <div className="flex items-center gap-2">
+                <input
+                  aria-label="Nama Sub-Tugas"
+                  className="min-w-0 flex-1 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-4 py-3 font-body-md text-body-md text-on-surface outline-none placeholder:text-outline focus:bg-surface-bright focus:ring-1 focus:ring-primary"
+                  placeholder="Nama Sub-Tugas"
+                  value={newSubtaskTitle}
+                  onChange={(event) => setNewSubtaskTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleAddSubtask();
+                    }
+                  }}
+                />
+                <button
+                  aria-label="Tambah Sub-Tugas"
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-DEFAULT bg-primary text-on-primary shadow-xs hover:bg-primary-container"
+                  onClick={handleAddSubtask}
+                  type="button"
+                >
+                  <span className="material-symbols-outlined text-[20px]">add</span>
+                </button>
+              </div>
+
+              {subtasks.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {subtasks.map((subtask, index) => (
+                    <button
+                      key={subtask.id}
+                      type="button"
+                      onClick={() => setActiveSubtaskId(subtask.id)}
+                      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${
+                        activeSubtask?.id === subtask.id
+                          ? 'border-primary bg-primary/5 text-primary'
+                          : 'border-outline-variant/30 bg-surface-container-lowest text-on-surface hover:bg-surface-container-low'
+                      }`}
                     >
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
-                        <span className="w-6 h-6 rounded-full bg-surface-container flex items-center justify-center font-label-sm text-label-sm text-on-surface-variant font-bold shrink-0 mt-0.5">
-                          {index + 1}
-                        </span>
-                        <div className="flex flex-col gap-2 min-w-0 flex-1">
-                          <span className="font-label-md text-label-md text-on-surface font-semibold leading-snug">
-                            {item.text}
-                          </span>
-                          <div className="flex flex-wrap items-center gap-2">
-                            {item.hasPhoto && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-container-low text-on-surface-variant font-label-sm text-label-sm border border-outline-variant/30">
-                                <span className="material-symbols-outlined text-[14px] text-primary">
-                                  photo_camera
-                                </span>
-                                Foto Wajib
-                              </span>
-                            )}
-                            {item.conditionText && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed font-label-sm text-label-sm">
-                                <span className="material-symbols-outlined text-[14px]">tune</span>
-                                {item.conditionText}
-                              </span>
-                            )}
-                            {item.hasTimestamp && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-label-sm text-label-sm">
-                                <span className="material-symbols-outlined text-[14px] text-tertiary">schedule</span>
-                                GPS &amp; Timestamp
-                              </span>
-                            )}
-                            {item.notesText && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed font-label-sm text-label-sm">
-                                <span className="material-symbols-outlined text-[14px]">edit_note</span>
-                                {item.notesText}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <button
-                        className="p-1.5 rounded-full hover:bg-error-container text-outline hover:text-error transition-colors shrink-0 cursor-pointer"
-                        onClick={() => handleDeleteItem(item.id)}
-                        title="Hapus Tugas Ini"
-                        type="button"
-                      >
-                        <span className="material-symbols-outlined text-[18px]">close</span>
-                      </button>
+                      <span>{index + 1}. {subtask.title}</span>
+                      <span className="rounded-full bg-surface-container px-2 py-0.5 text-xs">{subtask.items.length}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {activeSubtask ? (
+                <React.Fragment>
+                <div className="flex flex-col gap-4 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-low p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-label-md text-label-md font-bold text-on-surface">{activeSubtask.title}</h4>
+                      <p className="text-xs text-secondary">Something To Do di dalam Sub-Tugas ini</p>
                     </div>
-                  ))
+                    <button
+                      aria-label={`Hapus Sub-Tugas ${activeSubtask.title}`}
+                      className="flex h-9 w-9 items-center justify-center rounded-lg text-error hover:bg-error-container"
+                      onClick={() => handleDeleteSubtask(activeSubtask.id)}
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                    </button>
+                  </div>
+                  {activeSubtask.items.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {activeSubtask.items.map((item, index) => (
+                        <div key={item.id} className="flex items-start justify-between gap-3 rounded-lg border border-outline-variant/30 bg-surface-container-lowest p-3">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-container text-xs font-bold text-on-surface-variant">{index + 1}</span>
+                            <div className="min-w-0">
+                              <p className="font-label-md text-label-md font-semibold text-on-surface">{item.text}</p>
+                              <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                                {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-0.5">Foto</span>}
+                                {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-0.5">{item.conditionText || 'Kondisi'}</span>}
+                                {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Tanggal &amp; GPS</span>}
+                                {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-0.5">Keterangan</span>}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            aria-label={`Hapus ${item.text}`}
+                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-outline hover:bg-error-container hover:text-error"
+                            onClick={() => handleDeleteItem(activeSubtask.id, item.id)}
+                            type="button"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">close</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-outline-variant/50 p-4 text-center text-sm text-secondary">Belum ada Something To Do di Sub-Tugas ini.</p>
+                  )}
+
+                  <div className="flex items-center gap-2 border-t border-outline-variant/30 pt-4">
+                    <input
+                      aria-label="Something To Do"
+                      className="min-w-0 flex-1 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-4 py-3 font-body-md text-body-md text-on-surface outline-none placeholder:text-outline focus:ring-1 focus:ring-primary"
+                      placeholder="Something to do"
+                      value={newItemText}
+                      onChange={(event) => setNewItemText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          handleAddNewChecklist();
+                        }
+                      }}
+                    />
+                    <button
+                      aria-label="Tambah Something To Do"
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-DEFAULT bg-primary text-on-primary shadow-xs hover:bg-primary-container"
+                      onClick={handleAddNewChecklist}
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined text-[20px]">add</span>
+                    </button>
+                  </div>
+
+                </div>
+                </React.Fragment>
+              ) : (
+                <p className="rounded-lg border border-dashed border-outline-variant/40 p-5 text-center text-sm text-secondary">Buat Sub-Tugas, lalu tambahkan Something To Do ke dalamnya.</p>
+              )}
+            </div>
+            {activeSubtask && (
+              <div className="flex flex-col gap-4 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest p-5 shadow-xs">
+                <div>
+                  <h3 className="font-headline-md text-headline-md font-bold text-on-surface">Fitur respons petugas</h3>
+                  <p className="mt-1 text-sm text-secondary">Pengaturan ini diterapkan pada Something To Do yang akan ditambahkan.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
+                    <input checked={togglePhoto} onChange={(event) => setTogglePhoto(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">photo_camera</span>Input gambar wajib</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
+                    <input checked={toggleCondition} onChange={(event) => setToggleCondition(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>Pilihan kondisi</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
+                    <input checked={toggleLogicCondition} onChange={(event) => setToggleLogicCondition(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-tertiary">functions</span>Logic Kondisi (Input Nilai &gt; Teks Otomatis)</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
+                    <input checked={toggleTimestamp} onChange={(event) => setToggleTimestamp(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">schedule</span>Tanggal, waktu &amp; GPS</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface sm:col-span-2">
+                    <input checked={toggleNotes} onChange={(event) => setToggleNotes(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px]">description</span>Keterangan petugas</span>
+                  </label>
+                </div>
+                {toggleCondition && (
+                  <div className="flex flex-col gap-3 rounded-DEFAULT bg-surface-container-low p-3">
+                    <h4 className="font-label-md text-label-md font-semibold text-on-surface">Daftar Pilihan Kondisi</h4>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input aria-label="Pilihan kondisi baru" className="min-w-0 flex-1 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-sm text-on-surface" placeholder="Tulis satu pilihan kondisi" value={newConditionOption} onChange={(event) => setNewConditionOption(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && (event.preventDefault(), handleAddConditionOption())} />
+                      <button type="button" onClick={handleAddConditionOption} className="inline-flex items-center justify-center gap-1 rounded-DEFAULT bg-surface-container-high px-3 py-2 text-sm font-semibold text-on-surface hover:bg-secondary-container"><span className="material-symbols-outlined text-[16px]">add</span>Tambah pilihan</button>
+                    </div>
+                    {conditionOptions.length > 0 ? (
+                      <ol className="flex flex-col gap-1.5">
+                        {conditionOptions.map((option, index) => (
+                          <li key={`${option}-${index}`} className="flex items-center justify-between gap-3 rounded-DEFAULT bg-surface-container-lowest px-3 py-2 text-sm text-on-surface">
+                            <span>{index + 1}. {option}</span>
+                            <button type="button" aria-label={`Hapus pilihan ${option}`} onClick={() => setConditionOptions((previous) => previous.filter((_, optionIndex) => optionIndex !== index))} className="text-outline hover:text-error"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : <p className="text-xs text-secondary">Belum ada Pilihan Kondisi.</p>}
+                  </div>
+                )}
+                {toggleLogicCondition && (
+                  <div className="flex flex-col gap-3 rounded-DEFAULT bg-surface-container-low p-3">
+                    <div>
+                      <h4 className="font-label-md text-label-md font-bold text-on-surface">Atur Skema Logic Kondisi</h4>
+                      <p className="mt-0.5 text-xs text-secondary">Nilai petugas dicocokkan dengan rentang dan menghasilkan teks otomatis.</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <label className="flex flex-col gap-1 text-xs font-medium text-secondary">Min<input type="number" step="any" value={newLogicRange.min} onChange={(event) => setNewLogicRange((previous) => ({ ...previous, min: event.target.value }))} className="min-w-0 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-sm text-on-surface" /></label>
+                      <label className="flex flex-col gap-1 text-xs font-medium text-secondary">Max<input type="number" step="any" value={newLogicRange.max} onChange={(event) => setNewLogicRange((previous) => ({ ...previous, max: event.target.value }))} className="min-w-0 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-sm text-on-surface" /></label>
+                      <label className="flex flex-col gap-1 text-xs font-medium text-secondary">Output<input type="text" value={newLogicRange.output} onChange={(event) => setNewLogicRange((previous) => ({ ...previous, output: event.target.value }))} placeholder="Teks hasil otomatis" className="min-w-0 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-sm text-on-surface" /></label>
+                      <button type="button" onClick={handleAddLogicRange} className="inline-flex items-center justify-center gap-1 rounded-DEFAULT bg-secondary-container px-3 py-2 text-sm font-semibold text-on-secondary-container hover:bg-primary hover:text-on-primary sm:col-span-3"><span className="material-symbols-outlined text-[16px]">add</span>Tambah Rentang Logika Baru</button>
+                    </div>
+                    {logicRanges.length > 0 ? (
+                      <ol className="flex flex-col gap-1.5">
+                        {logicRanges.map((range, index) => (
+                          <li key={range.id} className="flex items-start justify-between gap-3 rounded-DEFAULT bg-surface-container-lowest px-3 py-2 text-sm text-on-surface">
+                            <span>{index + 1}. Rentang: {range.min} s/d {range.max}<br /><strong>Output:</strong> {range.output}</span>
+                            <button type="button" aria-label={`Hapus rentang ${range.min} sampai ${range.max}`} onClick={() => setLogicRanges((previous) => previous.filter((item) => item.id !== range.id))} className="text-outline hover:text-error"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : <p className="text-xs text-secondary">Belum ada rentang logika.</p>}
+                  </div>
                 )}
               </div>
-
-              {/* INPUT PANEL: Add Sub-Title & Field Response Options Configuration */}
-              <div className="flex flex-col p-5 rounded-DEFAULT bg-surface-container-low gap-4 mt-2 border border-outline-variant/40">
-                <div className="flex items-center justify-between">
-                  <span className="font-label-md text-label-md font-bold text-on-surface flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[20px] text-primary">add_circle</span>
-                    Tambah Sub-Tugas Checklist &amp; Aturan Respon
-                  </span>
-                  <span className="font-label-sm text-label-sm text-secondary">Ditugaskan ke lokasi terpilih</span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <input
-                    id="new-item-text"
-                    className="w-full px-4 py-3 rounded-DEFAULT bg-surface-container-lowest text-on-surface font-body-md text-body-md outline-none placeholder:text-outline focus:bg-surface-bright focus:ring-1 focus:ring-primary transition-all border border-outline-variant/30"
-                    placeholder="Ketik nama sub-tugas / item checklist baru di sini..."
-                    type="text"
-                    value={newItemText}
-                    onChange={(e) => setNewItemText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddNewChecklist();
-                      }
-                    }}
-                  />
-                  <select
-                    value={newItemPmType}
-                    onChange={(e) => setNewItemPmType(e.target.value as PmTypeKey)}
-                    className="w-full px-4 py-2.5 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/30 text-on-surface text-body-sm"
-                  >
-                    {Object.values(PM_TYPE_DEFINITIONS).map((definition) => (
-                      <option key={definition.key} value={definition.key}>{definition.label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Field Responses Feature Toggles */}
-                <div className="flex flex-col gap-2.5 pt-1">
-                  <span className="font-label-sm text-label-sm text-secondary uppercase font-bold tracking-wider">
-                    Fitur Respon Petugas di Lapangan (Wajib Saat Teknisi Mengerjakan PM):
-                  </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <label className="flex items-center gap-2.5 p-2.5 rounded-DEFAULT bg-surface-container-lowest cursor-pointer text-on-surface hover:bg-surface-bright transition-colors select-none border border-outline-variant/20">
-                      <input
-                        checked={togglePhoto}
-                        onChange={(e) => setTogglePhoto(e.target.checked)}
-                        className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        id="toggle-photo"
-                        type="checkbox"
-                      />
-                      <span className="font-body-sm text-body-sm font-semibold flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[16px] text-primary">photo_camera</span>
-                        Insert Picture (Foto Lapangan Wajib)
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-2.5 p-2.5 rounded-DEFAULT bg-surface-container-lowest cursor-pointer text-on-surface hover:bg-surface-bright transition-colors select-none border border-outline-variant/20">
-                      <input
-                        checked={toggleCondition}
-                        onChange={(e) => setToggleCondition(e.target.checked)}
-                        className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        id="toggle-condition"
-                        type="checkbox"
-                      />
-                      <span className="font-body-sm text-body-sm font-semibold flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
-                        Choose Kondisi ({conditionOptions.join(' / ')})
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-2.5 p-2.5 rounded-DEFAULT bg-surface-container-lowest cursor-pointer text-on-surface hover:bg-surface-bright transition-colors select-none border border-outline-variant/20">
-                      <input
-                        checked={toggleTimestamp}
-                        onChange={(e) => setToggleTimestamp(e.target.checked)}
-                        className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        id="toggle-timestamp"
-                        type="checkbox"
-                      />
-                      <span className="font-body-sm text-body-sm font-semibold flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[16px] text-primary">schedule</span>
-                        Catat Waktu &amp; Tanggal (GPS Auto)
-                      </span>
-                    </label>
-
-                    <label className="flex items-center gap-2.5 p-2.5 rounded-DEFAULT bg-surface-container-lowest cursor-pointer text-on-surface hover:bg-surface-bright transition-colors select-none border border-outline-variant/20">
-                      <input
-                        checked={toggleNotes}
-                        onChange={(e) => setToggleNotes(e.target.checked)}
-                        className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        id="toggle-notes"
-                        type="checkbox"
-                      />
-                      <span className="font-body-sm text-body-sm font-semibold flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[16px]">description</span>
-                        Text Box (Keterangan Manual Petugas)
-                      </span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Conditions Preview Pill */}
-                <div className="flex items-center justify-between p-3 rounded-DEFAULT bg-surface-container-lowest border border-outline-variant/20">
-                  <div className="flex items-center gap-2 flex-wrap" id="conditions-pills-container">
-                    <span className="font-label-sm text-label-sm text-secondary">Pilihan Kondisi:</span>
-                    {conditionOptions.map((opt) => (
-                      <span
-                        key={opt}
-                        className="px-2 py-0.5 rounded bg-surface-container text-on-surface font-label-sm text-label-sm font-medium"
-                      >
-                        {opt}
-                      </span>
-                    ))}
-                  </div>
-                  <button
-                    className="font-label-sm text-label-sm text-primary hover:underline font-semibold cursor-pointer"
-                    onClick={handleOpenConditionsDialog}
-                    type="button"
-                  >
-                    + Edit / Tambah Opsi
-                  </button>
-                </div>
-
-                {/* Action Button */}
-                <div className="flex justify-end pt-2">
-                  <button
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-DEFAULT bg-primary text-on-primary hover:bg-primary-container font-label-md text-label-md transition-all shadow-xs active:scale-95 cursor-pointer font-semibold"
-                    onClick={handleAddNewChecklist}
-                    type="button"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">add_task</span>
-                    <span>+ Tambahkan Sub-Tugas ke Checklist</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -1152,7 +1325,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
             <div className="flex flex-col">
               <span className="font-label-md text-label-md text-on-surface font-semibold" id="footer-summary-text">
                 Siap diterbitkan untuk {totalCheckedCount} Titik Lokasi di {activeRegionsCount} Wilayah Operasional •{' '}
-                {items.length} Total Checklist Inspeksi
+                {subtasks.length} Sub-Tugas · {allChecklistItems.length} Something To Do
               </span>
               <span className="font-body-sm text-body-sm text-secondary" id="footer-deadline">
                 {footerDeadlineText}

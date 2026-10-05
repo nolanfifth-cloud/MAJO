@@ -1,15 +1,17 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
-  orderBy,
+  onSnapshot,
   query,
   setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import { PmItem, RegisteredAccount, RegionConfig } from '../types';
-import { firestore, isFirebaseConfigured } from './firebase';
+import { firebaseAuth, firestore, isFirebaseConfigured } from './firebase';
 import { PortalMasterConfig, getActivePortalAddress, normalizePortalAddress } from './workflowStore';
 
 const portalDocId = (portalAddress?: string): string => {
@@ -39,17 +41,53 @@ export async function savePortalConfigToFirestore(config: PortalMasterConfig): P
 }
 
 export async function loadAdminJobsFromFirestore(): Promise<PmItem[]> {
-  if (!isFirebaseConfigured || !firestore) return [];
-  const snapshot = await getDocs(query(collection(firestore, 'jobs'), orderBy('createdAt', 'desc')));
-  return snapshot.docs.map((item) => item.data() as PmItem);
+  return loadJobsForPortalFromFirestore(getActivePortalAddress());
 }
 
-export async function loadJobsForLocationFromFirestore(location: string): Promise<PmItem[]> {
-  if (!isFirebaseConfigured || !firestore || !location) return [];
+export async function loadJobsForPortalFromFirestore(portalId: string): Promise<PmItem[]> {
+  if (!isFirebaseConfigured || !firestore || !portalId) return [];
+  const normalizedPortalId = normalizePortalAddress(portalId);
   const snapshot = await getDocs(
-    query(collection(firestore, 'jobs'), where('targetWilayahList', 'array-contains', location))
+    query(collection(firestore, 'jobs'), where('portalId', '==', normalizedPortalId))
   );
-  return snapshot.docs.map((item) => item.data() as PmItem);
+  return snapshot.docs.map((item) => ({
+    ...(item.data() as PmItem),
+    id: item.id,
+    portalId: normalizedPortalId,
+  }));
+}
+
+export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
+  const database = firestore;
+  if (!isFirebaseConfigured || !database) return [];
+  const authenticatedUid = firebaseAuth?.currentUser?.uid;
+  if (!authenticatedUid) throw new Error('Sesi Firebase tidak aktif. Silakan login ulang sebagai user.');
+  const profileSnapshot = await getDoc(doc(database, 'users', authenticatedUid));
+  const profile = profileSnapshot.data();
+  const portalId = normalizePortalAddress(String(profile?.portalAddress || ''));
+  const location = String(profile?.location || '');
+  if (!profileSnapshot.exists() || profile?.role !== 'user' || !portalId || !location) return [];
+
+  const [locationAssignments, legacyAssignments] = await Promise.all([
+    getDocs(collection(database, 'portalJobCatalog', portalId, 'locations', location, 'jobs')),
+    getDocs(collection(database, 'users', authenticatedUid, 'jobAssignments')),
+  ]);
+  const jobIds = new Set([
+    ...locationAssignments.docs.map((assignment) => String(assignment.data().jobId || assignment.id)),
+    ...legacyAssignments.docs.map((assignment) => String(assignment.data().jobId || assignment.id)),
+  ]);
+  const jobs = await Promise.all([...jobIds].map(async (jobId) => {
+    try {
+      const jobSnapshot = await getDoc(doc(database, 'jobs', jobId));
+      if (!jobSnapshot.exists()) return null;
+      const job = jobSnapshot.data() as PmItem;
+      if (normalizePortalAddress(job.portalId || '') !== portalId || !job.targetWilayahList?.includes(location)) return null;
+      return { ...job, id: jobSnapshot.id };
+    } catch {
+      return null;
+    }
+  }));
+  return jobs.filter((job): job is PmItem => job !== null);
 }
 
 export async function saveJobProgressToFirestore(
@@ -57,59 +95,227 @@ export async function saveJobProgressToFirestore(
   userUid: string,
   location: string,
   devices: unknown[],
-  summary?: { progress: number; doneCount: number; totalCount: number }
+  portalId: string,
+  summary?: { progress: number; doneCount: number; totalCount: number },
+  technicianName?: string
 ): Promise<void> {
-  if (!isFirebaseConfigured || !firestore) return;
+  if (!isFirebaseConfigured || !firestore || !portalId) return;
+  const hasInlinePhoto = devices.some((device) => {
+    if (!device || typeof device !== 'object') return false;
+    const photo = (device as { formData?: { photo?: unknown } }).formData?.photo;
+    return typeof photo === 'string' && photo.startsWith('data:');
+  });
+  if (hasInlinePhoto) throw new Error('Foto belum tersimpan ke Cloudinary; unggah ulang sebelum menyimpan progres.');
   const progressId = `${jobId}_${userUid}`;
   await setDoc(doc(firestore, 'jobProgress', progressId), {
     jobId,
     userUid,
     location,
+    portalId: normalizePortalAddress(portalId),
+    ...(technicianName ? { technicianName } : {}),
     devices,
     ...(summary || {}),
     updatedAt: new Date().toISOString(),
   }, { merge: true });
 }
 
-export async function loadJobProgressFromFirestore(): Promise<Record<string, unknown>[]> {
-  if (!isFirebaseConfigured || !firestore) return [];
-  const snapshot = await getDocs(collection(firestore, 'jobProgress'));
+export async function loadJobProgressFromFirestore(portalId: string): Promise<Record<string, unknown>[]> {
+  if (!isFirebaseConfigured || !firestore || !portalId) return [];
+  const snapshot = await getDocs(
+    query(collection(firestore, 'jobProgress'), where('portalId', '==', normalizePortalAddress(portalId)))
+  );
   return snapshot.docs.map((item) => item.data());
 }
 
-export async function loadRegisteredAccountsFromFirestore(): Promise<RegisteredAccount[]> {
-  if (!isFirebaseConfigured || !firestore) return [];
-  const snapshot = await getDocs(collection(firestore, 'users'));
+export function subscribeToJobProgressFromFirestore(
+  portalId: string,
+  onProgress: (snapshots: Record<string, unknown>[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!isFirebaseConfigured || !firestore || !portalId) return () => undefined;
+  const progressQuery = query(
+    collection(firestore, 'jobProgress'),
+    where('portalId', '==', normalizePortalAddress(portalId))
+  );
+  return onSnapshot(
+    progressQuery,
+    (snapshot) => onProgress(snapshot.docs.map((item) => item.data())),
+    (error) => onError?.(error)
+  );
+}
+
+export async function loadJobProgressForUserFromFirestore(userUid: string): Promise<Record<string, unknown>[]> {
+  if (!isFirebaseConfigured || !firestore || !userUid) return [];
+  if (firebaseAuth?.currentUser?.uid !== userUid) {
+    throw new Error('Sesi Firebase tidak cocok dengan akun user yang aktif.');
+  }
+  const snapshot = await getDocs(
+    query(collection(firestore, 'jobProgress'), where('userUid', '==', userUid))
+  );
+  return snapshot.docs.map((item) => item.data());
+}
+
+export async function loadRegisteredAccountsFromFirestore(portalId: string): Promise<RegisteredAccount[]> {
+  if (!isFirebaseConfigured || !firestore || !portalId) return [];
+  const snapshot = await getDocs(
+    query(collection(firestore, 'users'), where('portalAddress', '==', normalizePortalAddress(portalId)))
+  );
   return snapshot.docs.map((item) => ({
     uid: item.id,
     ...(item.data() as RegisteredAccount),
   }));
 }
 
-export async function saveAdminJobToFirestore(job: PmItem, adminUid?: string): Promise<void> {
-  if (!isFirebaseConfigured || !firestore) return;
-  await setDoc(doc(firestore, 'jobs', job.id), {
-    ...job,
-    createdAt: new Date().toISOString(),
-    createdBy: adminUid || null,
-  });
+export async function loadPasswordResetRequestsFromFirestore(portalId: string): Promise<Record<string, unknown>[]> {
+  if (!isFirebaseConfigured || !firestore || !portalId) return [];
+  const snapshot = await getDocs(query(
+    collection(firestore, 'passwordResetRequests'),
+    where('portalAddress', '==', normalizePortalAddress(portalId))
+  ));
+  return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 }
 
-export async function saveCompletedReportToFirestore(report: Record<string, unknown>, userUid?: string): Promise<void> {
-  if (!isFirebaseConfigured || !firestore) return;
+export function subscribeToPasswordResetRequestsFromFirestore(
+  portalId: string,
+  onRequests: (requests: Record<string, unknown>[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!isFirebaseConfigured || !firestore || !portalId) return () => undefined;
+  const requestsQuery = query(
+    collection(firestore, 'passwordResetRequests'),
+    where('portalAddress', '==', normalizePortalAddress(portalId))
+  );
+  return onSnapshot(
+    requestsQuery,
+    (snapshot) => onRequests(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+    (error) => onError?.(error)
+  );
+}
+
+export async function saveAdminJobToFirestore(job: PmItem, adminUid: string, portalId: string): Promise<string | null> {
+  const database = firestore;
+  if (!isFirebaseConfigured || !database) return null;
+  if (!adminUid || !portalId) throw new Error('Sesi admin atau alamat portal tidak tersedia.');
+  const normalizedPortalId = normalizePortalAddress(portalId);
+  const targetLocations = new Set(job.targetWilayahList || []);
+  const assignedAccounts = await loadRegisteredAccountsFromFirestore(normalizedPortalId);
+  const targetUserUids = assignedAccounts
+    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
+    .map((account) => account.uid as string);
+  await setDoc(doc(database, 'jobs', job.id), {
+    ...job,
+    portalId: normalizedPortalId,
+    targetUserUids,
+    createdAt: new Date().toISOString(),
+    createdBy: adminUid,
+  });
+  await Promise.all(assignedAccounts
+    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
+    .map((account) => setDoc(doc(database, 'users', account.uid!, 'jobAssignments', job.id), {
+      jobId: job.id,
+      userUid: account.uid,
+      portalId: normalizedPortalId,
+      location: account.location,
+      createdBy: adminUid,
+    })));
+  await Promise.all([...targetLocations].map((location) => setDoc(
+    doc(database, 'portalJobCatalog', normalizedPortalId, 'locations', location, 'jobs', job.id),
+    { jobId: job.id, portalId: normalizedPortalId, location, createdBy: adminUid }
+  )));
+  return normalizedPortalId;
+}
+
+export async function assignExistingAdminJobToUsers(
+  job: PmItem,
+  adminUid: string,
+  accounts: RegisteredAccount[]
+): Promise<void> {
+  const database = firestore;
+  if (!isFirebaseConfigured || !database || !job.id || !adminUid || job.createdBy !== adminUid) return;
+  const targetLocations = new Set(job.targetWilayahList || []);
+  const targetUserUids = accounts
+    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
+    .map((account) => account.uid as string);
+  await updateDoc(doc(database, 'jobs', job.id), { targetUserUids });
+  await Promise.all(accounts
+    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
+    .map((account) => setDoc(doc(database, 'users', account.uid!, 'jobAssignments', job.id), {
+      jobId: job.id,
+      userUid: account.uid,
+      portalId: job.portalId,
+      location: account.location,
+      createdBy: adminUid,
+    })));
+  await Promise.all([...targetLocations].map((location) => setDoc(
+    doc(database, 'portalJobCatalog', normalizePortalAddress(job.portalId || ''), 'locations', location, 'jobs', job.id),
+    { jobId: job.id, portalId: normalizePortalAddress(job.portalId || ''), location, createdBy: adminUid }
+  )));
+}
+
+export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string): Promise<void> {
+  if (!job.id) throw new Error('ID pekerjaan tidak tersedia.');
+  const database = firestore;
+  if (!isFirebaseConfigured || !database || !job.portalId) return;
+
+  const adminUid = firebaseAuth?.currentUser?.uid;
+  const activePortalId = normalizePortalAddress(portalId || '') || getActivePortalAddress();
+  if (!adminUid) throw new Error('Sesi Firebase tidak aktif. Silakan login ulang sebagai admin.');
+  if (!activePortalId) throw new Error('Alamat portal admin tidak ditemukan.');
+  if (normalizePortalAddress(job.portalId) !== activePortalId) {
+    throw new Error('Pekerjaan ini bukan bagian dari portal admin yang sedang aktif.');
+  }
+
+  const targetLocations = new Set(job.targetWilayahList || []);
+  const accounts = await loadRegisteredAccountsFromFirestore(activePortalId);
+  const recipientUids = new Set(job.targetUserUids || []);
+  accounts.forEach((account) => {
+    if (account.uid && account.location && targetLocations.has(account.location)) {
+      recipientUids.add(account.uid);
+    }
+  });
+
+  await Promise.all([...recipientUids].map(async (userUid) => {
+    try {
+      await deleteDoc(doc(database, 'users', userUid, 'jobAssignments', job.id));
+    } catch {
+      // A missing or legacy assignment must not block removal of the job itself.
+    }
+  }));
+  await Promise.all([...(job.targetWilayahList || [])].map(async (location) => {
+    try {
+      await deleteDoc(doc(database, 'portalJobCatalog', activePortalId, 'locations', location, 'jobs', job.id));
+    } catch {
+      // A missing or legacy catalog entry must not block removal of the job itself.
+    }
+  }));
+  await deleteDoc(doc(database, 'jobs', job.id));
+}
+
+export async function saveCompletedReportToFirestore(report: Record<string, unknown>, userUid: string, portalId: string): Promise<void> {
+  if (!isFirebaseConfigured || !firestore || !userUid || !portalId) return;
   const reportId = String(report.id || `${Date.now()}`);
   await setDoc(doc(firestore, 'completedReports', reportId), {
     ...report,
-    submittedBy: userUid || null,
+    portalId: normalizePortalAddress(portalId),
+    submittedBy: userUid,
     savedAt: new Date().toISOString(),
   });
 }
 
-export async function loadCompletedReportsFromFirestore(userUid?: string): Promise<Record<string, unknown>[]> {
+export async function loadCompletedReportsFromFirestore(userUid?: string, portalId?: string): Promise<Record<string, unknown>[]> {
   if (!isFirebaseConfigured || !firestore) return [];
   const reportsQuery = userUid
-    ? query(collection(firestore, 'completedReports'), where('submittedBy', '==', userUid), orderBy('savedAt', 'desc'))
-    : query(collection(firestore, 'completedReports'), orderBy('savedAt', 'desc'));
+    ? portalId
+      ? query(
+          collection(firestore, 'completedReports'),
+          where('submittedBy', '==', userUid),
+          where('portalId', '==', normalizePortalAddress(portalId))
+        )
+      : null
+    : portalId
+      ? query(collection(firestore, 'completedReports'), where('portalId', '==', normalizePortalAddress(portalId)))
+      : null;
+  if (!reportsQuery) return [];
   const snapshot = await getDocs(reportsQuery);
   return snapshot.docs.map((item) => item.data());
 }

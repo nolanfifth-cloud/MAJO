@@ -3,22 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { AuthView, RegisteredAccount } from './types';
-import { LoginView } from './components/LoginView';
-import { RegisterView } from './components/RegisterView';
-import { ForgotPasswordView } from './components/ForgotPasswordView';
-import { AdminDashboard } from './components/AdminDashboard';
-import { UserDashboard } from './components/UserDashboard';
 import {
   authPersistenceReady,
   firebaseAuth,
   getRegisteredAccountForFirebaseUser,
   isFirebaseConfigured,
   onAuthStateChanged,
+  sanitizeCachedAccountPasswords,
   signOut,
 } from './services/firebase';
 import { setActivePortalAddress } from './services/workflowStore';
+
+const LoginView = lazy(() => import('./components/LoginView').then((module) => ({ default: module.LoginView })));
+const RegisterView = lazy(() => import('./components/RegisterView').then((module) => ({ default: module.RegisterView })));
+const ForgotPasswordView = lazy(() => import('./components/ForgotPasswordView').then((module) => ({ default: module.ForgotPasswordView })));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((module) => ({ default: module.AdminDashboard })));
+const UserDashboard = lazy(() => import('./components/UserDashboard').then((module) => ({ default: module.UserDashboard })));
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AuthView>('login');
@@ -45,20 +47,11 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    sanitizeCachedAccountPasswords();
 
     if (!isFirebaseConfigured || !firebaseAuth) {
-      try {
-        const storedSession = localStorage.getItem('majo_session');
-        if (storedSession) {
-          const user = JSON.parse(storedSession) as typeof currentUser;
-          setCurrentUser(user);
-          setCurrentView(user.role === 'admin' ? 'admin_dashboard' : 'user_dashboard');
-        }
-      } catch {
-        localStorage.removeItem('majo_session');
-      } finally {
-        setIsAuthLoading(false);
-      }
+      setCurrentView('login');
+      setIsAuthLoading(false);
       return;
     }
 
@@ -160,42 +153,43 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen w-full relative">
-      {/* Primary Screen Render */}
-      {currentView === 'login' && (
-        <LoginView
-          onNavigate={(view) => setCurrentView(view)}
-          prefilledUsername={prefilledUsername}
-          onLoginSuccess={handleLoginSuccess}
-        />
-      )}
+    <Suspense fallback={<div className="min-h-screen w-full bg-surface-container-lowest" />}>
+      <div className="min-h-screen w-full relative">
+        {currentView === 'login' && (
+          <LoginView
+            onNavigate={(view) => setCurrentView(view)}
+            prefilledUsername={prefilledUsername}
+            onLoginSuccess={handleLoginSuccess}
+          />
+        )}
 
-      {currentView === 'register' && (
-        <RegisterView
-          onNavigate={(view) => setCurrentView(view)}
-          onRegisterSuccess={handleRegisterSuccess}
-        />
-      )}
+        {currentView === 'register' && (
+          <RegisterView
+            onNavigate={(view) => setCurrentView(view)}
+            onRegisterSuccess={handleRegisterSuccess}
+          />
+        )}
 
-      {currentView === 'forgot_password' && (
-        <ForgotPasswordView onNavigate={(view) => setCurrentView(view)} />
-      )}
+        {currentView === 'forgot_password' && (
+          <ForgotPasswordView onNavigate={(view) => setCurrentView(view)} />
+        )}
 
-      {currentView === 'admin_dashboard' && (
-        <AdminDashboard
-          onNavigate={(view) => setCurrentView(view)}
+        {currentView === 'admin_dashboard' && (
+          <AdminDashboard
+            onNavigate={(view) => setCurrentView(view)}
             onLogout={handleLogout}
-          currentUser={currentUser}
-        />
-      )}
+            currentUser={currentUser}
+          />
+        )}
 
-      {currentView === 'user_dashboard' && (
-        <UserDashboard
-          onNavigate={(view) => setCurrentView(view)}
-          onLogout={handleLogout}
-          currentUser={currentUser}
-        />
-      )}
-    </div>
+        {currentView === 'user_dashboard' && (
+          <UserDashboard
+            onNavigate={(view) => setCurrentView(view)}
+            onLogout={handleLogout}
+            currentUser={currentUser}
+          />
+        )}
+      </div>
+    </Suspense>
   );
 }

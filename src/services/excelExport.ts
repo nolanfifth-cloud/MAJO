@@ -1,4 +1,4 @@
-import ExcelJS from 'exceljs';
+import type ExcelJS from 'exceljs';
 import { PmItem } from '../types';
 
 const COLORS = {
@@ -12,6 +12,147 @@ const COLORS = {
   border: 'CBD5E1',
   white: 'FFFFFF',
 };
+
+export interface CompletedPmReportExport {
+  id: string;
+  year?: number;
+  title: string;
+  completedAt: string;
+  period: string;
+  region: string;
+  subJobsCount: number;
+  pointsCount: number;
+  submittedBy?: string;
+  subJobs: Array<{
+    name: string;
+    tag?: string;
+    device: string;
+    duration: string;
+    file: string;
+    time: string;
+    desc: string;
+    status?: string;
+    latitude?: number;
+    longitude?: number;
+  }>;
+}
+
+export async function downloadCompletedPmReport(report: CompletedPmReportExport): Promise<void> {
+  const ExcelJS = (await import('exceljs')).default;
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'MAJO Portal';
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const bast = workbook.addWorksheet('BAST', {
+    pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
+  });
+  bast.columns = [
+    { width: 25 },
+    { width: 34 },
+    { width: 25 },
+    { width: 34 },
+  ];
+  bast.mergeCells('A1:D1');
+  bast.getCell('A1').value = 'BERITA ACARA SERAH TERIMA (BAST)';
+  bast.getCell('A1').font = { bold: true, size: 16, color: { argb: COLORS.white } };
+  bast.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.navy } };
+  bast.getCell('A1').alignment = { vertical: 'middle', horizontal: 'center' };
+  bast.getRow(1).height = 34;
+  bast.mergeCells('A2:D2');
+  bast.getCell('A2').value = 'Dokumen serah terima pekerjaan Preventive Maintenance';
+  bast.getCell('A2').font = { italic: true, size: 10, color: { argb: COLORS.slate } };
+  bast.getCell('A2').alignment = { horizontal: 'center' };
+  bast.addRow([]);
+
+  const bastRows: Array<[string, string, string, string]> = [
+    ['Nomor PM', report.id, 'Nama Pekerjaan', report.title],
+    ['Periode Pelaksanaan', report.period, 'Wilayah', report.region],
+    ['Tanggal Selesai', report.completedAt, 'Jumlah Sub-Tugas', String(report.subJobsCount)],
+    ['Jumlah Titik Checklist', String(report.pointsCount), 'Status', 'Selesai 100%'],
+  ];
+  bastRows.forEach((values) => {
+    const row = bast.addRow(values);
+    row.height = 32;
+    row.eachCell((cell, columnNumber) => {
+      cell.alignment = { vertical: 'middle', wrapText: true };
+      cell.border = {
+        top: { style: 'thin', color: { argb: COLORS.border } },
+        bottom: { style: 'thin', color: { argb: COLORS.border } },
+        left: { style: 'thin', color: { argb: COLORS.border } },
+        right: { style: 'thin', color: { argb: COLORS.border } },
+      };
+      if (columnNumber === 1 || columnNumber === 3) {
+        cell.font = { bold: true, color: { argb: COLORS.slate }, size: 9 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.paleSlate } };
+      } else {
+        cell.font = { color: { argb: COLORS.navy }, size: 10 };
+      }
+    });
+  });
+  bast.addRow([]);
+  bast.mergeCells('A8:D8');
+  bast.getCell('A8').value = 'Pernyataan Serah Terima';
+  bast.getCell('A8').font = { bold: true, size: 11, color: { argb: COLORS.navy } };
+  bast.mergeCells('A9:D10');
+  bast.getCell('A9').value = `Pekerjaan "${report.title}" di wilayah ${report.region} telah diselesaikan dan dilaporkan oleh petugas pada ${report.completedAt}. Rincian Something To Do dan hasil pemeriksaan tercantum pada sheet Detail Checklist.`;
+  bast.getCell('A9').alignment = { vertical: 'top', wrapText: true };
+  bast.getCell('A9').font = { size: 10, color: { argb: COLORS.navy } };
+  bast.getRow(9).height = 32;
+  bast.getRow(10).height = 24;
+  bast.addRow([]);
+  bast.addRow(['Petugas Pelaksana', '', 'Penerima / PIC', '']);
+  bast.addRow(['Nama: ____________________', '', 'Nama: ____________________', '']);
+  bast.addRow(['Tanda tangan: ______________', '', 'Tanda tangan: ______________', '']);
+  bast.addRow(['Tanggal: __________________', '', 'Tanggal: __________________', '']);
+  bast.getRow(12).font = { bold: true, color: { argb: COLORS.navy } };
+  [13, 14, 15].forEach((rowNumber) => { bast.getRow(rowNumber).height = 30; });
+  bast.pageSetup.printArea = 'A1:D15';
+
+  const details = workbook.addWorksheet('Detail Checklist', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  details.columns = [
+    { header: 'No', key: 'no', width: 8 },
+    { header: 'Sub-Tugas', key: 'subtask', width: 32 },
+    { header: 'Something To Do', key: 'task', width: 38 },
+    { header: 'Titik Perangkat', key: 'device', width: 32 },
+    { header: 'Status / Kondisi', key: 'status', width: 20 },
+    { header: 'Durasi', key: 'duration', width: 16 },
+    { header: 'Foto Bukti', key: 'photo', width: 28 },
+    { header: 'Waktu Verifikasi', key: 'time', width: 28 },
+    { header: 'GPS', key: 'gps', width: 28 },
+    { header: 'Keterangan', key: 'notes', width: 54 },
+  ];
+  const header = details.getRow(1);
+  styleTableHeader(header);
+  const rows = report.subJobs.map((item, index) => details.addRow({
+    no: index + 1,
+    subtask: item.name,
+    task: item.name,
+    device: item.device,
+    status: item.status || 'Belum diisi',
+    duration: item.duration,
+    photo: item.file,
+    time: item.time,
+    gps: item.latitude !== undefined && item.longitude !== undefined
+      ? `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
+      : '',
+    notes: item.desc,
+  }));
+  styleBodyRows(rows);
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `BAST_Laporan_${report.id.replace(/[^a-zA-Z0-9-_]/g, '_')}.xlsx`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 function styleTableHeader(row: ExcelJS.Row) {
   row.height = 28;
@@ -45,7 +186,91 @@ function styleBodyRows(rows: ExcelJS.Row[]) {
   });
 }
 
+export async function downloadCompletedPmReports(reports: CompletedPmReportExport[]): Promise<void> {
+  if (reports.length === 0) throw new Error('Tidak ada laporan untuk diekspor.');
+  const ExcelJS = (await import('exceljs')).default;
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'MAJO Portal';
+  workbook.created = new Date();
+
+  const summary = workbook.addWorksheet('Rekap Riwayat', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  summary.columns = [
+    { header: 'ID PM', key: 'id', width: 24 },
+    { header: 'Nama Pekerjaan', key: 'title', width: 42 },
+    { header: 'Tahun', key: 'year', width: 12 },
+    { header: 'Tanggal Selesai', key: 'completedAt', width: 24 },
+    { header: 'Periode', key: 'period', width: 28 },
+    { header: 'Wilayah', key: 'region', width: 30 },
+    { header: 'Jumlah Sub-Tugas', key: 'subJobsCount', width: 18 },
+    { header: 'Jumlah Checklist', key: 'pointsCount', width: 18 },
+    { header: 'Dikirim Oleh', key: 'submittedBy', width: 28 },
+  ];
+  styleTableHeader(summary.getRow(1));
+  const summaryRows = reports.map((report) => summary.addRow({
+    id: report.id,
+    title: report.title,
+    year: report.year,
+    completedAt: report.completedAt,
+    period: report.period,
+    region: report.region,
+    subJobsCount: report.subJobsCount,
+    pointsCount: report.pointsCount,
+    submittedBy: report.submittedBy || '',
+  }));
+  styleBodyRows(summaryRows);
+  summary.autoFilter = { from: 'A1', to: 'I1' };
+
+  const details = workbook.addWorksheet('Detail Checklist', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  details.columns = [
+    { header: 'ID PM', key: 'reportId', width: 24 },
+    { header: 'Nama Pekerjaan', key: 'title', width: 42 },
+    { header: 'Sub-Tugas', key: 'subtask', width: 32 },
+    { header: 'Titik Perangkat', key: 'device', width: 32 },
+    { header: 'Status / Kondisi', key: 'status', width: 22 },
+    { header: 'Durasi', key: 'duration', width: 16 },
+    { header: 'Foto Bukti', key: 'photo', width: 28 },
+    { header: 'Waktu Verifikasi', key: 'time', width: 28 },
+    { header: 'GPS', key: 'gps', width: 28 },
+    { header: 'Keterangan', key: 'notes', width: 54 },
+  ];
+  styleTableHeader(details.getRow(1));
+  const detailRows = reports.flatMap((report) => report.subJobs.map((item) => details.addRow({
+    reportId: report.id,
+    title: report.title,
+    subtask: item.name,
+    device: item.device,
+    status: item.status || 'Belum diisi',
+    duration: item.duration,
+    photo: item.file,
+    time: item.time,
+    gps: item.latitude !== undefined && item.longitude !== undefined
+      ? `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
+      : '',
+    notes: item.desc,
+  })));
+  styleBodyRows(detailRows);
+  details.autoFilter = { from: 'A1', to: 'J1' };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `Rekap_Riwayat_PM_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function downloadPmReportExcel(target: PmItem): Promise<void> {
+  const ExcelJS = (await import('exceljs')).default;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'MAJO Portal';
   workbook.created = new Date();

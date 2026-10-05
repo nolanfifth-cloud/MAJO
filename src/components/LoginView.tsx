@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AuthView, RegisteredAccount } from '../types';
 import { isFirebaseConfigured, loginWithFirebase } from '../services/firebase';
 
-const LOGO_URL = '/assets/logo%20MAJO.png';
+const LOGO_URL = '/assets/Logo%20MAJO.png';
 
 interface LoginViewProps {
   onNavigate: (view: AuthView) => void;
@@ -44,30 +44,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
       setErrorMessage('Harap masukkan kata sandi.');
       return;
     }
+    if (!isFirebaseConfigured) {
+      setErrorMessage('Firebase belum dikonfigurasi. Login lokal dinonaktifkan demi keamanan.');
+      return;
+    }
 
     setIsLoading(true);
 
     try {
       let foundAccount: RegisteredAccount | undefined;
 
-      if (isFirebaseConfigured) {
-        foundAccount = await loginWithFirebase(username, password);
-      } else {
-        try {
-          const stored = localStorage.getItem('majo_accounts');
-          if (stored) {
-            const accounts: RegisteredAccount[] = JSON.parse(stored);
-            const credential = username.trim().toLowerCase();
-            foundAccount = accounts.find(
-              (account) => account.username?.toLowerCase() === credential || account.email?.toLowerCase() === credential
-            );
-          }
-        } catch {
-          foundAccount = undefined;
-        }
-      }
+      foundAccount = await loginWithFirebase(username, password);
 
-      if (!foundAccount || (!isFirebaseConfigured && foundAccount.password !== password)) {
+      if (!foundAccount) {
         setErrorMessage('Username/email atau kata sandi tidak sesuai.');
         return;
       }
@@ -128,10 +117,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 referrerPolicy="no-referrer"
               />
             </div>
+                <span>Autentikasi &amp; Hak Akses</span>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xl font-bold tracking-tight text-on-surface">MAJO</span>
+                Login dikelola Firebase Authentication dengan akses data berdasarkan peran dan portal.
               </div>
+                          <span>Portal Operasional MAJO</span>
+                              Selamat datang kembali di MAJO Portal, <strong className="text-on-surface font-semibold">@{loginSuccessUser}</strong>. Kredensial Anda diverifikasi oleh Firebase Authentication.
+                                <span className="font-semibold text-emerald-600">Firebase Auth aktif</span>
               <p className="text-xs text-secondary font-medium">
                 <b>Halaman Login untuk Seluruh Admin dan User</b>
               </p>
@@ -195,10 +188,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-on-surface">
-                Akses Terenkripsi & Mandiri
+                Autentikasi &amp; Hak Akses
               </span>
               <span className="text-xs text-secondary">
-                Sistem kredensial privat aman berbasis enterprise tanpa ketergantungan luar.
+                Login dikelola Firebase Authentication dengan akses data berdasarkan peran dan portal.
               </span>
             </div>
           </div>
@@ -219,7 +212,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           {/* Status Micro Badge */}
           <div className="inline-flex items-center gap-2 px-3 py-1 mb-6 rounded-full bg-surface-container text-secondary text-[11px] font-bold uppercase tracking-wider">
             <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-            <span>Portal Akses Terenkripsi</span>
+            <span>Portal Operasional MAJO</span>
           </div>
 
           {loginSuccessUser ? (
@@ -232,12 +225,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 Autentikasi Berhasil
               </h2>
               <p className="text-sm text-secondary mb-4 leading-relaxed">
-                Selamat datang kembali di MAJO Portal, <strong className="text-on-surface font-semibold">@{loginSuccessUser}</strong>. Kredensial Anda terverifikasi dengan enkripsi aman.
+                Selamat datang kembali di MAJO Portal, <strong className="text-on-surface font-semibold">@{loginSuccessUser}</strong>. Kredensial Anda diverifikasi oleh Firebase Authentication.
               </p>
               <div className="p-3 bg-surface-container-lowest rounded-xl border border-outline-variant/20 text-xs text-secondary space-y-1 mb-5">
                 <div className="flex justify-between">
                   <span>Status Sesi:</span>
-                  <span className="font-semibold text-emerald-600">Aktif & Terenkripsi</span>
+                  <span className="font-semibold text-emerald-600">Firebase Auth aktif</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Hak Akses:</span>
@@ -306,7 +299,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     className="text-[11px] font-bold text-secondary uppercase tracking-wider px-1"
                     htmlFor="usernameInput"
                   >
-                    <b>Username atau Email</b>
+                    <b>{isFirebaseConfigured ? 'Username atau Email Admin' : 'Username atau Email'}</b>
                   </label>
                   <div className="relative flex items-center w-full group">
                     <div className="absolute left-4 flex items-center justify-center pointer-events-none text-secondary group-focus-within:text-primary transition-colors">
@@ -317,7 +310,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       className="w-full h-14 pl-12 pr-4 bg-surface-container-low text-on-surface text-sm placeholder:text-outline rounded-full outline-none transition-all duration-200 focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary/20 shadow-sm"
                       id="usernameInput"
                       name="username"
-                      placeholder="Username atau email admin"
+                      placeholder={isFirebaseConfigured ? 'Masukkan username atau email admin' : 'Username atau email admin'}
                       required
                       type="text"
                       value={username}

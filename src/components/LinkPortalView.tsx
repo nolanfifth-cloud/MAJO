@@ -1,22 +1,44 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { RegionConfig, StaffResetRequest } from '../types';
 import { getPortalConfig, getPortalConfigForAddress, savePortalConfig } from '../services/workflowStore';
-import { hasRealPortalLocation, loadPortalConfigFromFirestore, savePortalConfigToFirestore } from '../services/firestoreStore';
+import { hasRealPortalLocation, loadPortalConfigFromFirestore, savePortalConfigToFirestore, subscribeToPasswordResetRequestsFromFirestore } from '../services/firestoreStore';
+import { isFirebaseConfigured, resetPasswordFromRequest } from '../services/firebase';
 
 interface LinkPortalViewProps {
   onNavigateToDashboard?: () => void;
   onNavigateToCreateJobs?: () => void;
-  onConfigurationCompleted?: () => void;
+  onConfigurationUpdated?: () => void;
 }
 
 const INITIAL_MASTER_LOCATIONS: string[] = [];
 const INITIAL_REGIONS: RegionConfig[] = [];
 const INITIAL_STAFF_REQUESTS: StaffResetRequest[] = [];
 
+const mapResetRequestToStaff = (request: Record<string, unknown>): StaffResetRequest => {
+  const username = String(request.username || 'Akun tanpa username');
+  return {
+    id: String(request.id || request.ticketId || crypto.randomUUID()),
+    ticketId: String(request.ticketId || request.id || ''),
+    name: String(request.targetName || request.name || username),
+    username,
+    role: String(request.targetRole || 'Permintaan reset'),
+    location: String(request.targetLocation || request.portalAddress || 'Portal tidak ditentukan'),
+    employeeId: typeof request.employeeId === 'string' ? request.employeeId : undefined,
+    notes: typeof request.notes === 'string' ? request.notes : undefined,
+    accountMatched: typeof request.accountMatched === 'boolean' ? request.accountMatched : undefined,
+    status: request.status === 'processing' || request.status === 'completed' ? request.status : 'pending',
+    timeAgo: 'Baru saja',
+    avatar: username.slice(0, 2).toUpperCase(),
+    selected: false,
+    isReset: request.status === 'completed',
+    isLocal: String(request.ticketId || request.id || '').startsWith('RESET-LOCAL-'),
+  };
+};
+
 export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   onNavigateToDashboard,
   onNavigateToCreateJobs,
-  onConfigurationCompleted,
+  onConfigurationUpdated,
 }) => {
   const activePortalAddress = (() => {
     try {
@@ -47,18 +69,39 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   });
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const firestoreSaveQueue = useRef(Promise.resolve());
+  const hasLocalEdits = useRef(false);
 
   const hasConfiguredLocation = masterLocations.length > 0 || regions.some((region) => region.locations.length > 0);
   const isPortalReady = isPortalActivated && hasConfiguredLocation;
 
   useEffect(() => {
     let cancelled = false;
-    loadPortalConfigFromFirestore(activePortalAddress).then((config) => {
-      if (!config || cancelled) return;
-      const hasCloudLocations = Boolean(
-        config.masterWilayah?.length || config.masterGroups?.some((group) => group.locations?.length)
-      );
-      if (hasCloudLocations || (!localPortalConfig.masterWilayah.length && !localPortalConfig.masterGroups.length)) {
+    const localHasOrganizationData = Boolean(
+      localPortalConfig.masterWilayah.length || localPortalConfig.masterGroups.length
+    );
+
+    loadPortalConfigFromFirestore(activePortalAddress).then(async (config) => {
+      if (cancelled || hasLocalEdits.current) return;
+      const cloudHasOrganizationData = Boolean(config?.masterWilayah?.length || config?.masterGroups?.length);
+
+      if (cloudHasOrganizationData && config) {
+        setMasterLocations(config.masterWilayah || []);
+        setRegions(config.masterGroups || []);
+        setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
+        savePortalConfig(config, activePortalAddress);
+        return;
+      }
+
+      if (localHasOrganizationData) {
+        if (isFirebaseConfigured) {
+          const migrationSave = firestoreSaveQueue.current.then(() => savePortalConfigToFirestore(localPortalConfig));
+          firestoreSaveQueue.current = migrationSave.catch(() => undefined);
+          await migrationSave;
+        }
+        return;
+      }
+
+      if (config) {
         setMasterLocations(config.masterWilayah || []);
         setRegions(config.masterGroups || []);
         setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
@@ -67,7 +110,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     }).catch((error) => {
       if (!cancelled) {
         const message = error instanceof Error ? error.message : 'Gagal memuat konfigurasi Firebase.';
-        showToast(`Data lokal ditampilkan. Gagal memuat Firebase: ${message}`, 'info');
+        showToast(`Data lokal tetap ditampilkan. Gagal sinkronisasi Firebase: ${message}`, 'info');
       }
     });
     return () => {
@@ -83,10 +126,33 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   // State: Staff Password Reset Widget
   const [isResetWidgetCollapsed, setIsResetWidgetCollapsed] = useState<boolean>(false);
-  const [defaultPassword, setDefaultPassword] = useState<string>('Majo2026!');
-  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [staffRequests, setStaffRequests] = useState<StaffResetRequest[]>(INITIAL_STAFF_REQUESTS);
   const [isResettingStaff, setIsResettingStaff] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isFirebaseConfigured && !import.meta.env.DEV) {
+      return subscribeToPasswordResetRequestsFromFirestore(
+        activePortalAddress,
+        (requests) => setStaffRequests((previous) => {
+          const passwordsById = new Map(previous
+            .filter((staff) => staff.temporaryPassword)
+            .map((staff) => [staff.id, staff.temporaryPassword!]));
+          return requests.map((request) => {
+            const staff = mapResetRequestToStaff(request);
+            return { ...staff, temporaryPassword: passwordsById.get(staff.id) };
+          });
+        }),
+        () => setStaffRequests([])
+      );
+    }
+    try {
+      const localRequests = JSON.parse(localStorage.getItem('majo_reset_tickets') || '[]') as Record<string, unknown>[];
+      setStaffRequests(Array.isArray(localRequests) ? localRequests.map(mapResetRequestToStaff) : []);
+    } catch {
+      setStaffRequests([]);
+    }
+    return undefined;
+  }, [activePortalAddress]);
 
   // State: Modals
   const [isAddRegionModalOpen, setIsAddRegionModalOpen] = useState<boolean>(false);
@@ -98,6 +164,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const [searchMasterBranchQuery, setSearchMasterBranchQuery] = useState<string>('');
   const [isQuickMasterInlineOpen, setIsQuickMasterInlineOpen] = useState<boolean>(false);
   const [directMasterInput, setDirectMasterInput] = useState<string>('');
+  const [newSubLocationInputs, setNewSubLocationInputs] = useState<Record<string, string>>({});
+  const [newPlaceInputs, setNewPlaceInputs] = useState<Record<string, string>>({});
 
   // Double Verification Delete Modal State
   const [doubleDeleteConfig, setDoubleDeleteConfig] = useState<{
@@ -153,7 +221,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     nextLocations: string[],
     nextRegions: RegionConfig[],
     nextActivated = isPortalActivated
-  ) => {
+  ): Promise<boolean> => {
+    hasLocalEdits.current = true;
     const currentConfig = getPortalConfigForAddress(activePortalAddress);
     const nextConfig: typeof currentConfig = {
       ...currentConfig,
@@ -165,14 +234,27 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     };
 
     savePortalConfig(nextConfig, activePortalAddress);
+    onConfigurationUpdated?.();
 
-    firestoreSaveQueue.current = firestoreSaveQueue.current
-      .then(() => savePortalConfigToFirestore(nextConfig))
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : 'Gagal menyimpan ke Firebase.';
-        showToast(`Tersimpan di perangkat, tetapi gagal ke Firebase: ${message}`, 'info');
-      });
-    await firestoreSaveQueue.current;
+    if (!isFirebaseConfigured) {
+      setIsPortalActivated(false);
+      savePortalConfig({ ...nextConfig, isActivated: false }, activePortalAddress);
+      showToast('Data tersimpan di perangkat ini saja. Firebase belum dikonfigurasi.', 'info');
+      return false;
+    }
+
+    const saveOperation = firestoreSaveQueue.current.then(() => savePortalConfigToFirestore(nextConfig));
+    firestoreSaveQueue.current = saveOperation.catch(() => undefined);
+    try {
+      await saveOperation;
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gagal menyimpan ke Firebase.';
+      if (nextActivated) setIsPortalActivated(false);
+      savePortalConfig({ ...nextConfig, isActivated: false }, activePortalAddress);
+      showToast(`Data lokasi/wilayah tetap tersimpan lokal, tetapi Firebase gagal menyimpan: ${message}`, 'info');
+      return false;
+    }
   };
 
   // Filtered Flat Locations
@@ -216,12 +298,10 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       setIsSaving(false);
       setIsPortalActivated(true);
       try {
-        await persistPortalConfigSnapshot(masterLocations, regions, true);
+        const savedToFirebase = await persistPortalConfigSnapshot(masterLocations, regions, true);
+        if (!savedToFirebase) return;
       } catch {
         // Ignore
-      }
-      if (onConfigurationCompleted) {
-        onConfigurationCompleted();
       }
       showToast('Struktur organisasi berhasil disimpan dan Link Portal aktif!', 'success');
     }, 600);
@@ -315,6 +395,71 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     setDirectMasterInput('');
   };
 
+  const handleAddSubLocation = (regionId: string, locationName: string) => {
+    const inputKey = `${regionId}:${locationName}`;
+    const name = (newSubLocationInputs[inputKey] || '').trim();
+    if (!name) return;
+
+    let wasDuplicate = false;
+    const nextRegions = regions.map((region) => {
+      if (region.id !== regionId) return region;
+      const existing = region.locationHierarchy?.[locationName] || [];
+      if (existing.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+        wasDuplicate = true;
+        return region;
+      }
+      return {
+        ...region,
+        locationHierarchy: {
+          ...region.locationHierarchy,
+          [locationName]: [...existing, { id: `sub_${Date.now()}`, name, places: [] }],
+        },
+      };
+    });
+    if (wasDuplicate) {
+      showToast(`Sub Lokasi "${name}" sudah ada di ${locationName}.`, 'info');
+      return;
+    }
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated);
+    setNewSubLocationInputs((prev) => ({ ...prev, [inputKey]: '' }));
+    showToast(`Sub Lokasi "${name}" berhasil ditambahkan.`, 'success');
+  };
+
+  const handleAddPlace = (regionId: string, locationName: string, subLocationId: string) => {
+    const inputKey = `${regionId}:${locationName}:${subLocationId}`;
+    const name = (newPlaceInputs[inputKey] || '').trim();
+    if (!name) return;
+
+    let wasDuplicate = false;
+    const nextRegions = regions.map((region) => {
+      if (region.id !== regionId) return region;
+      const subLocations = region.locationHierarchy?.[locationName] || [];
+      return {
+        ...region,
+        locationHierarchy: {
+          ...region.locationHierarchy,
+          [locationName]: subLocations.map((subLocation) => {
+            if (subLocation.id !== subLocationId) return subLocation;
+            if (subLocation.places.some((place) => place.toLowerCase() === name.toLowerCase())) {
+              wasDuplicate = true;
+              return subLocation;
+            }
+            return { ...subLocation, places: [...subLocation.places, name] };
+          }),
+        },
+      };
+    });
+    if (wasDuplicate) {
+      showToast(`Tempat "${name}" sudah ada di Sub Lokasi ini.`, 'info');
+      return;
+    }
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated);
+    setNewPlaceInputs((prev) => ({ ...prev, [inputKey]: '' }));
+    showToast(`Tempat "${name}" berhasil ditambahkan.`, 'success');
+  };
+
   // Double Verification Delete Helpers
   const requestDeleteRegion = (regionId: string) => {
     const reg = regions.find((r) => r.id === regionId);
@@ -383,7 +528,9 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
         if (r.id === regId) {
           const nextLocs = [...r.locations];
           nextLocs.splice(idx, 1);
-          return { ...r, locations: nextLocs };
+          const locationHierarchy = { ...r.locationHierarchy };
+          delete locationHierarchy[doubleDeleteConfig.branchName || ''];
+          return { ...r, locations: nextLocs, locationHierarchy };
         }
         return r;
       });
@@ -391,10 +538,15 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     } else if (doubleDeleteConfig.type === 'flatLocation' && doubleDeleteConfig.locName) {
       const targetName = doubleDeleteConfig.locName;
       nextLocations = masterLocations.filter((l) => l !== targetName);
-      nextRegions = regions.map((r) => ({
-        ...r,
-        locations: r.locations.filter((l) => l !== targetName),
-      }));
+      nextRegions = regions.map((r) => {
+        const locationHierarchy = { ...r.locationHierarchy };
+        delete locationHierarchy[targetName];
+        return {
+          ...r,
+          locations: r.locations.filter((l) => l !== targetName),
+          locationHierarchy,
+        };
+      });
       showToast(`Master lokasi "${targetName}" berhasil dihapus`, 'success');
     }
 
@@ -419,7 +571,10 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   // Staff Password Reset Handlers
   const handleToggleSelectAllStaff = (checked: boolean) => {
-    setStaffRequests((prev) => prev.map((s) => ({ ...s, selected: checked })));
+    setStaffRequests((prev) => prev.map((staff) => ({
+      ...staff,
+      selected: !staff.isReset && staff.status !== 'processing' && staff.accountMatched !== false && checked,
+    })));
   };
 
   const handleToggleStaff = (id: string) => {
@@ -429,26 +584,51 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   };
 
   const selectedStaffCount = useMemo(() => {
-    return staffRequests.filter((s) => s.selected).length;
+    return staffRequests.filter((staff) => staff.selected && !staff.isReset && staff.status !== 'processing' && staff.accountMatched !== false).length;
   }, [staffRequests]);
 
   const allStaffSelected = useMemo(() => {
-    return staffRequests.length > 0 && staffRequests.every((s) => s.selected);
+    const pendingRequests = staffRequests.filter((staff) => !staff.isReset && staff.status !== 'processing' && staff.accountMatched !== false);
+    return pendingRequests.length > 0 && pendingRequests.every((staff) => staff.selected);
   }, [staffRequests]);
 
-  const handleExecuteStaffReset = () => {
-    if (selectedStaffCount === 0) return;
+  const handleExecuteStaffReset = async () => {
+    const selectedRequests = staffRequests.filter((staff) => staff.selected && !staff.isReset && staff.status !== 'processing' && staff.accountMatched !== false);
+    if (selectedRequests.length === 0) return;
     setIsResettingStaff(true);
-    setTimeout(() => {
+    if (!isFirebaseConfigured || import.meta.env.DEV) {
+      const completedIds = new Set(selectedRequests.map((staff) => staff.id));
+      setStaffRequests((previous) => previous.map((staff) =>
+        completedIds.has(staff.id) ? { ...staff, selected: false, isReset: true } : staff
+      ));
+      try {
+        const localRequests = JSON.parse(localStorage.getItem('majo_reset_tickets') || '[]') as Record<string, unknown>[];
+        localStorage.setItem('majo_reset_tickets', JSON.stringify(localRequests.map((request) =>
+          completedIds.has(String(request.ticketId || request.id)) ? { ...request, status: 'completed' } : request
+        )));
+      } catch {
+        // Keep the in-memory simulation available if browser storage is unavailable.
+      }
       setIsResettingStaff(false);
-      setStaffRequests((prev) =>
-        prev.map((s) => (s.selected ? { ...s, isReset: true } : s))
-      );
-      showToast(
-        `Kata sandi ${selectedStaffCount} staf berhasil direset ke "${defaultPassword}"!`,
-        'success'
-      );
-    }, 600);
+      showToast('Simulasi lokal selesai. Password akun tidak diubah.', 'info');
+      return;
+    }
+
+    const results = await Promise.allSettled(selectedRequests.map(async (staff) => {
+      if (!staff.ticketId) throw new Error('ID tiket reset tidak tersedia.');
+      const temporaryPassword = await resetPasswordFromRequest(staff.ticketId);
+      return { id: staff.id, temporaryPassword };
+    }));
+    const resetResults = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    const failedCount = results.length - resetResults.length;
+    setStaffRequests((previous) => previous.map((staff) => {
+      const result = resetResults.find((item) => item.id === staff.id);
+      return result ? { ...staff, selected: false, isReset: true, temporaryPassword: result.temporaryPassword } : staff;
+    }));
+    setIsResettingStaff(false);
+    showToast(failedCount > 0
+      ? `${resetResults.length} password direset; ${failedCount} tiket gagal diproses.`
+      : `${resetResults.length} password berhasil direset. Sampaikan password sementara kepada staf.`, failedCount > 0 ? 'info' : 'success');
   };
 
   // Active target region info for Add Branch Modal
@@ -1293,26 +1473,116 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                             <span className="font-label-sm text-label-sm text-on-surface-variant font-medium uppercase tracking-wider">
                               Titik Cabang Terdaftar:
                             </span>
-                            <div className="flex flex-wrap items-center gap-2">
-                              {region.locations.map((locName, locIdx) => (
-                                <div
-                                  key={locName}
-                                  className="inline-flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full bg-surface-container-lowest text-on-surface shadow-xs border border-outline/10"
-                                >
-                                  <span className="material-symbols-outlined text-primary text-[16px]">
-                                    location_on
-                                  </span>
-                                  <span className="font-label-md text-label-md font-medium">{locName}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => requestDeleteBranchFromRegion(region.id, locIdx)}
-                                    title="Hapus Lokasi"
-                                    className="text-outline hover:text-error transition-colors p-0.5 rounded-full hover:bg-surface-container-high cursor-pointer"
+                            <div className="flex flex-col gap-3">
+                              {region.locations.map((locName, locIdx) => {
+                                const locationKey = `${region.id}:${locName}`;
+                                const subLocations = region.locationHierarchy?.[locName] || [];
+                                return (
+                                  <div
+                                    key={locName}
+                                    className="flex flex-col gap-3 p-3 rounded-DEFAULT bg-surface-container-lowest border border-outline/10"
                                   >
-                                    <span className="material-symbols-outlined text-[14px]">close</span>
-                                  </button>
-                                </div>
-                              ))}
+                                    <div className="inline-flex items-center gap-2 self-start pl-3 pr-2 py-1.5 rounded-full bg-surface-container-low text-on-surface">
+                                      <span className="material-symbols-outlined text-primary text-[16px]">
+                                        location_on
+                                      </span>
+                                      <span className="font-label-md text-label-md font-medium">{locName}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => requestDeleteBranchFromRegion(region.id, locIdx)}
+                                        title="Hapus Lokasi"
+                                        className="text-outline hover:text-error transition-colors p-0.5 rounded-full hover:bg-surface-container-high cursor-pointer"
+                                      >
+                                        <span className="material-symbols-outlined text-[14px]">close</span>
+                                      </button>
+                                    </div>
+
+                                    {subLocations.length > 0 && (
+                                      <div className="flex flex-col gap-2 pl-3 border-l-2 border-secondary-container">
+                                        {subLocations.map((subLocation) => {
+                                          const placeInputKey = `${locationKey}:${subLocation.id}`;
+                                          return (
+                                            <div
+                                              key={subLocation.id}
+                                              className="flex flex-col gap-2 p-3 rounded-DEFAULT bg-surface-container-low border border-outline-variant/20"
+                                            >
+                                              <div className="flex items-center gap-2">
+                                                <span className="material-symbols-outlined text-secondary text-[18px]">
+                                                  account_tree
+                                                </span>
+                                                <span className="font-label-md text-label-md font-semibold text-on-surface">
+                                                  {subLocation.name}
+                                                </span>
+                                              </div>
+                                              <div className="flex flex-wrap gap-1.5">
+                                                {(subLocation.places || []).map((place) => (
+                                                  <span
+                                                    key={place}
+                                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-tertiary-container/50 text-on-surface font-body-sm text-[12px]"
+                                                  >
+                                                    <span className="material-symbols-outlined text-[14px]">place</span>
+                                                    {place}
+                                                  </span>
+                                                ))}
+                                                {subLocation.places.length === 0 && (
+                                                  <span className="font-body-sm text-[12px] text-outline">
+                                                    Belum ada Tempat
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <div className="flex flex-col sm:flex-row gap-2">
+                                                <input
+                                                  type="text"
+                                                  value={newPlaceInputs[placeInputKey] || ''}
+                                                  onChange={(event) => setNewPlaceInputs((prev) => ({
+                                                    ...prev,
+                                                    [placeInputKey]: event.target.value,
+                                                  }))}
+                                                  onKeyDown={(event) => event.key === 'Enter' && handleAddPlace(region.id, locName, subLocation.id)}
+                                                  placeholder="Nama Tempat"
+                                                  aria-label={`Nama Tempat di ${subLocation.name}`}
+                                                  className="min-w-0 flex-1 px-3 py-2 rounded-DEFAULT bg-surface-container-lowest border border-outline/20 text-on-surface font-body-sm outline-none focus:border-primary"
+                                                />
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleAddPlace(region.id, locName, subLocation.id)}
+                                                  className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-DEFAULT bg-surface-container-high hover:bg-secondary-container text-on-surface font-label-sm text-label-sm transition-colors cursor-pointer"
+                                                >
+                                                  <span className="material-symbols-outlined text-[16px]">add</span>
+                                                  <span>Tambah Tempat</span>
+                                                </button>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                      <input
+                                        type="text"
+                                        value={newSubLocationInputs[locationKey] || ''}
+                                        onChange={(event) => setNewSubLocationInputs((prev) => ({
+                                          ...prev,
+                                          [locationKey]: event.target.value,
+                                        }))}
+                                        onKeyDown={(event) => event.key === 'Enter' && handleAddSubLocation(region.id, locName)}
+                                        placeholder={`Sub Lokasi di ${locName}`}
+                                        aria-label={`Nama Sub Lokasi di ${locName}`}
+                                        className="min-w-0 flex-1 px-3 py-2 rounded-DEFAULT bg-surface-container-low border border-outline/20 text-on-surface font-body-sm outline-none focus:border-primary"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAddSubLocation(region.id, locName)}
+                                        className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-DEFAULT bg-secondary-container hover:bg-primary text-on-secondary-container hover:text-on-primary font-label-sm text-label-sm transition-colors cursor-pointer"
+                                      >
+                                        <span className="material-symbols-outlined text-[16px]">add</span>
+                                        <span>Tambah Sub Lokasi</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
 
                               {/* Tambah Lokasi Trigger */}
                               <button
@@ -1649,44 +1919,9 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               {/* Collapsible Widget Body */}
               {!isResetWidgetCollapsed && (
                 <div className="flex flex-col gap-5 transition-all duration-200">
-                  {/* Custom Default Password Perusahaan Box */}
-                  <div className="p-4 rounded-DEFAULT bg-[#f5f8ff] border border-[#e0ebff] flex flex-col gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-[#0284c7] text-[18px]">vpn_key</span>
-                      <span className="font-bold text-[13.5px] text-[#0f172a]">
-                        Custom Default Password Perusahaan
-                      </span>
-                    </div>
-                    <p className="text-[12px] text-[#64748b] leading-normal">
-                      Password ini otomatis diterapkan saat reset dieksekusi.
-                    </p>
-                    <div className="flex items-center gap-2.5 pt-0.5">
-                      <div className="flex-1 flex items-center justify-between px-3.5 py-2.5 rounded-DEFAULT bg-white border border-[#e2e8f0] shadow-2xs focus-within:border-[#3b82f6] transition-all">
-                        <input
-                          type={showPassword ? 'text' : 'password'}
-                          value={defaultPassword}
-                          onChange={(e) => setDefaultPassword(e.target.value)}
-                          className="w-full bg-transparent border-none outline-none font-bold text-[14px] text-[#0f172a] tracking-wide placeholder:text-[#94a3b8]"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          title="Tampilkan/Sembunyikan Kata Sandi"
-                          className="text-[#0284c7] hover:text-[#0369a1] flex items-center p-0.5 ml-1 transition-colors cursor-pointer"
-                        >
-                          <span className="material-symbols-outlined text-[18px]">
-                            {showPassword ? 'visibility_off' : 'visibility'}
-                          </span>
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => showToast('Password default berhasil diperbarui!', 'success')}
-                        className="px-4 py-2.5 rounded-DEFAULT bg-[#edf2f7] hover:bg-[#e2e8f0] text-[#0f172a] font-bold text-[13px] whitespace-nowrap transition-colors shadow-2xs cursor-pointer"
-                      >
-                        Simpan Default
-                      </button>
-                    </div>
+                  <div className="flex items-start gap-2.5 rounded-DEFAULT border border-[#dbeafe] bg-[#eff6ff] p-3 text-xs text-[#1e3a8a]">
+                    <span className="material-symbols-outlined text-[18px]">security</span>
+                    <p>Password sementara dibuat acak oleh server setelah admin memproses tiket. Password hanya ditampilkan di panel admin dan perlu diserahkan langsung kepada staf.</p>
                   </div>
 
                   {/* Staff List Header & Select All Checkbox */}
@@ -1707,16 +1942,21 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
                   {/* Dynamic Staff Request Rows */}
                   <div className="flex flex-col gap-2.5" id="staffListContainer">
-                    {staffRequests.map((staff) => (
+                    {staffRequests.length === 0 ? (
+                      <p className="rounded-DEFAULT border border-dashed border-outline-variant/40 p-4 text-center text-sm text-secondary">
+                        Belum ada permintaan reset password.
+                      </p>
+                    ) : staffRequests.map((staff) => (
                       <div
                         key={staff.id}
-                        className="p-3.5 rounded-DEFAULT bg-[#f8faff] hover:bg-[#f1f5f9] border border-[#edf2f7] flex items-center justify-between transition-colors"
+                        className="flex flex-col gap-3 rounded-DEFAULT border border-[#edf2f7] bg-[#f8faff] p-3.5 transition-colors hover:bg-[#f1f5f9] sm:flex-row sm:items-center sm:justify-between"
                       >
                         <div className="flex items-center gap-3 flex-1 min-w-0">
                           <input
                             type="checkbox"
                             checked={staff.selected}
                             onChange={() => handleToggleStaff(staff.id)}
+                            disabled={staff.isReset || staff.status === 'processing' || staff.accountMatched === false}
                             className="w-4 h-4 rounded text-[#0f172a] focus:ring-0 cursor-pointer shrink-0 accent-[#091c33]"
                           />
                           <div className="w-9 h-9 rounded-full bg-[#dae0ed] text-[#1e293b] font-bold text-[12px] flex items-center justify-center shrink-0">
@@ -1732,14 +1972,33 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                             <span className="text-[11.5px] text-[#64748b]">
                               {staff.role} • {staff.location}
                             </span>
+                            {staff.employeeId && <span className="text-[11px] text-[#64748b]">Identitas: {staff.employeeId}</span>}
+                            {staff.notes && <span className="text-[11px] text-[#64748b]">Catatan: {staff.notes}</span>}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0 ml-3">
-                          {staff.isReset ? (
+                        <div className="flex items-center gap-2 shrink-0 sm:ml-3">
+                          {staff.accountMatched === false ? (
+                            <span className="text-[11px] font-semibold text-rose-700">Akun tidak ditemukan</span>
+                          ) : staff.temporaryPassword ? (
+                            <div className="flex items-center gap-2">
+                              <code className="rounded bg-white px-2 py-1 text-xs font-bold text-slate-800">{staff.temporaryPassword}</code>
+                              <button
+                                type="button"
+                                title="Salin password sementara"
+                                aria-label={`Salin password sementara ${staff.username}`}
+                                onClick={() => navigator.clipboard?.writeText(staff.temporaryPassword || '')}
+                                className="text-primary hover:text-on-primary-fixed-variant"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                              </button>
+                            </div>
+                          ) : staff.status === 'processing' ? (
+                            <span className="text-[11px] font-semibold text-amber-700">Sedang diproses</span>
+                          ) : staff.isReset ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#dcfce7] text-[#15803d] font-semibold text-[11px]">
                               <span className="material-symbols-outlined text-[13px]">check</span>
-                              Direset
+                              {staff.isLocal ? 'Simulasi selesai' : 'Direset'}
                             </span>
                           ) : (
                             <span className="text-[11.5px] text-[#64748b]">{staff.timeAgo}</span>

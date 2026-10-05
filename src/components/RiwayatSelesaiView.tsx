@@ -19,19 +19,25 @@ import {
   Check,
 } from 'lucide-react';
 import { loadCompletedReportsFromFirestore } from '../services/firestoreStore';
+import { downloadCompletedPmReport, downloadCompletedPmReports } from '../services/excelExport';
 
 export interface SubJobDetail {
   name: string;
-  tag: string;
+  tag?: string;
   device: string;
   duration: string;
   file: string;
   time: string;
   desc: string;
+  status?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface CompletedPMItem {
   id: string;
+  portalId?: string;
+  submittedBy?: string;
   year: number;
   title: string;
   completedAt: string;
@@ -589,19 +595,22 @@ const pmCompletedData: CompletedPMItem[] = []; /*
 interface RiwayatSelesaiViewProps {
   onTriggerToast: (message: string, isSuccess?: boolean) => void;
   userUid?: string;
+  portalId?: string;
 }
 
-export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTriggerToast, userUid }) => {
+export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTriggerToast, userUid, portalId }) => {
   // State for search and filter
   const [searchQuery, setSearchQuery] = useState('');
   const [filterYear, setFilterYear] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 10;
   const [cloudReports, setCloudReports] = useState<CompletedPMItem[]>([]);
+  const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
+  const [isExportingAll, setIsExportingAll] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    loadCompletedReportsFromFirestore(userUid).then((reports) => {
+    loadCompletedReportsFromFirestore(userUid, portalId).then((reports) => {
       if (!cancelled) setCloudReports(reports as unknown as CompletedPMItem[]);
     }).catch(() => {
       // Local reports remain available when Firestore is unavailable.
@@ -609,7 +618,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
     return () => {
       cancelled = true;
     };
-  }, [userUid]);
+  }, [userUid, portalId]);
 
   // State for expanded PM cards
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({
@@ -666,8 +675,11 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
       if (stored) {
         const parsed: CompletedPMItem[] = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Remove duplicates if any
-          const combined = [...cloudReports, ...parsed];
+          const matchingLocalReports = parsed.filter((report) =>
+            (!userUid || report.submittedBy === userUid)
+            && (!portalId || report.portalId === portalId)
+          );
+          const combined = [...cloudReports, ...matchingLocalReports];
           const unique = Array.from(new Map(combined.map((report) => [report.id, report])).values());
           return unique;
         }
@@ -677,7 +689,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
       // fallback
     }
     return pmCompletedData;
-  }, [cloudReports]);
+  }, [cloudReports, userUid, portalId]);
 
   // Filter Data
   const filteredData = useMemo(() => {
@@ -736,15 +748,35 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
   };
 
   // Export Excel Handlers
-  const handleExportAll = () => {
-    onTriggerToast(
-      `Mengunduh seluruh Rekapitulasi Riwayat PM 100% Selesai (${filteredData.length} tugas .xlsx)...`,
-      true
-    );
+  const handleExportAll = async () => {
+    if (filteredData.length === 0) {
+      onTriggerToast('Tidak ada laporan pada filter ini untuk diekspor.', false);
+      return;
+    }
+    setIsExportingAll(true);
+    try {
+      await downloadCompletedPmReports(filteredData);
+      onTriggerToast(`Rekap ${filteredData.length} laporan PM berhasil diunduh.`, true);
+    } catch (error) {
+      onTriggerToast(error instanceof Error ? error.message : 'Gagal mengekspor riwayat PM.', false);
+    } finally {
+      setIsExportingAll(false);
+    }
   };
 
-  const handleDownloadSingle = (pmId: string) => {
-    onTriggerToast(`Mengunduh berkas BAST & Laporan Excel untuk ${pmId}...`, true);
+  const handleDownloadSingle = async (report: CompletedPMItem) => {
+    setDownloadingReportId(report.id);
+    try {
+      await downloadCompletedPmReport(report);
+      onTriggerToast(`BAST & Detail Checklist ${report.id} berhasil diunduh.`, true);
+    } catch (error) {
+      onTriggerToast(
+        error instanceof Error ? `Gagal mengunduh laporan: ${error.message}` : 'Gagal membuat berkas BAST & Excel.',
+        false
+      );
+    } finally {
+      setDownloadingReportId(null);
+    }
   };
 
   return (
@@ -872,10 +904,11 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
           <button
             type="button"
             onClick={handleExportAll}
-            className="inline-flex items-center justify-center px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs gap-2 shrink-0 whitespace-nowrap cursor-pointer"
+            disabled={isExportingAll}
+            className="inline-flex items-center justify-center px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs gap-2 shrink-0 whitespace-nowrap cursor-pointer disabled:opacity-60 disabled:cursor-wait"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Export Rekap Excel</span>
+            <span>{isExportingAll ? 'Mengekspor...' : 'Export Rekap Excel'}</span>
           </button>
         </div>
       </div>
@@ -966,11 +999,12 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDownloadSingle(pm.id)}
+                        onClick={() => handleDownloadSingle(pm)}
+                        disabled={downloadingReportId === pm.id}
                         className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center space-x-1.5 shadow-2xs cursor-pointer"
                       >
                         <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Unduh BAST &amp; Excel</span>
+                        <span>{downloadingReportId === pm.id ? 'Menyiapkan berkas...' : 'Unduh BAST & Excel'}</span>
                       </button>
                     </div>
                   </div>
@@ -1025,7 +1059,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
                             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                               <div className="flex items-center space-x-2">
                                 <span className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold">
-                                  {activeSubJob.tag}
+                                  {currentSubJobIdx + 1}
                                 </span>
                                 <span className="text-sm font-bold text-[#0C1B33]">
                                   Titik Perangkat: {activeSubJob.device}

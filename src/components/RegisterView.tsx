@@ -8,10 +8,17 @@ import {
   setActivePortalAddress,
   validatePortalAddress,
 } from '../services/workflowStore';
-import { isFirebaseConfigured, registerAccountWithFirebase } from '../services/firebase';
-import { loadPortalConfigFromFirestore, savePortalConfigToFirestore } from '../services/firestoreStore';
+import { isFirebaseConfigured, registerAccountWithFirebase, resolveAdminInvitation } from '../services/firebase';
+import { loadPortalConfigFromFirestore } from '../services/firestoreStore';
 
-const LOGO_URL = '/assets/logo%20MAJO.png';
+const LOGO_URL = '/assets/Logo%20MAJO.png';
+const normalizePortalSlug = (value: string) => value
+  .trim()
+  .toLowerCase()
+  .replace(/(?:\.majo\.id)+$/i, '')
+  .replace(/[^a-z0-9-]/g, '-')
+  .replace(/-+/g, '-')
+  .replace(/^-|-$/g, '');
 
 interface RegisterViewProps {
   onNavigate: (view: AuthView) => void;
@@ -23,15 +30,18 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   onRegisterSuccess,
 }) => {
   const [portalConfig, setPortalConfig] = useState(() => getPortalConfig());
-  const [role, setRole] = useState<UserRole>('admin');
+  const [role, setRole] = useState<UserRole>(isFirebaseConfigured ? 'user' : 'admin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [portalAddress, setPortalAddress] = useState(
-    role === 'admin' ? portalConfig.portalAddress : portalConfig.portalLink
+    role === 'admin'
+      ? ''
+      : portalConfig.portalLink
   );
+  const [adminInviteCode, setAdminInviteCode] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<string>(
     portalConfig.masterWilayah[0] || 'Medan - Hub Operasional'
   );
@@ -91,8 +101,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   const handleRoleChange = (newRole: UserRole) => {
     setRole(newRole);
     setErrorMsg('');
+    setAdminInviteCode('');
     if (newRole === 'admin') {
-      setPortalAddress(portalConfig.portalAddress || 'pt-majo-logistik-indo');
+      setPortalAddress('');
     } else {
       setPortalAddress(portalConfig.portalLink || 'portal.majo.id/org/pt-majo-logistik-indo');
     }
@@ -101,6 +112,11 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+
+    if (!isFirebaseConfigured) {
+      setErrorMsg('Firebase belum dikonfigurasi. Registrasi lokal dinonaktifkan demi keamanan.');
+      return;
+    }
 
     if (role === 'user') {
       if (!portalAddress.trim()) {
@@ -117,19 +133,20 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         setErrorMsg('Harap pilih Wilayah tempat Anda bekerja.');
         return;
       }
-    } else {
-      if (!portalAddress.trim()) {
-        setErrorMsg('Harap masukkan alamat portal yang ingin dibuat.');
-        return;
-      }
+    } else if (!adminInviteCode.trim()) {
+      setErrorMsg('Kode undangan dari admin yang sudah login wajib diisi.');
+      return;
+    } else if (!portalAddress.trim()) {
+      setErrorMsg('Harap isi Create Portal Address untuk akun admin.');
+      return;
     }
 
     if (!name.trim()) {
       setErrorMsg('Harap masukkan nama lengkap Anda.');
       return;
     }
-    if (isFirebaseConfigured && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setErrorMsg(`Harap masukkan alamat email ${role === 'admin' ? 'admin' : 'akun'} yang valid.`);
+    if (isFirebaseConfigured && role === 'admin' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErrorMsg('Harap masukkan alamat email admin yang valid.');
       return;
     }
     if (!username.trim()) {
@@ -140,8 +157,8 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       setErrorMsg('Harap masukkan kata sandi.');
       return;
     }
-    if (password.length < 4) {
-      setErrorMsg('Kata sandi minimal 4 karakter.');
+    if (password.length < 8) {
+      setErrorMsg('Kata sandi minimal 8 karakter.');
       return;
     }
     if (password !== confirmPassword) {
@@ -152,34 +169,41 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
     setIsLoading(true);
 
     try {
-      let updatedPortalConfig = portalConfig;
-      // If admin, update portal config with the newly created portal address and permanent link
-      if (role === 'admin') {
-        const cleanSlug = portalAddress
-          .trim()
-          .toLowerCase()
-          .replace(/\.majo\.id$/, '')
-          .replace(/[^a-z0-9-]/g, '-')
-          .replace(/-+/g, '-')
-          .replace(/^-|-$/g, '');
-        const portalDomain = `${cleanSlug}.majo.id`;
-        updatedPortalConfig = {
-          ...portalConfig,
-          portalAddress: portalDomain,
-          portalLink: portalDomain,
-          isActivated: true,
-        };
-        savePortalConfig(updatedPortalConfig);
+      let verifiedPortalAddress = '';
+      if (isFirebaseConfigured && role === 'admin') {
+        await resolveAdminInvitation(adminInviteCode);
+        const portalSlug = normalizePortalSlug(portalAddress);
+        if (!portalSlug) {
+          setIsLoading(false);
+          setErrorMsg('Create Portal Address hanya boleh berisi huruf, angka, dan tanda hubung.');
+          return;
+        }
+        verifiedPortalAddress = `${portalSlug}.majo.id`;
+      }
+      if (isFirebaseConfigured && role === 'user') {
+        const portalSnapshot = await loadPortalConfigFromFirestore(normalizePortalAddress(portalAddress));
+        const configuredLocations = portalSnapshot?.masterWilayah || [];
+        if (!portalSnapshot || !portalSnapshot.isActivated) {
+          setIsLoading(false);
+          setErrorMsg('Portal tidak ditemukan atau belum diaktifkan. Periksa alamat portal dengan admin.');
+          return;
+        }
+        if (!configuredLocations.includes(selectedLocation)) {
+          setIsLoading(false);
+          setErrorMsg('Lokasi yang dipilih tidak terdaftar pada portal ini. Muat ulang pilihan lokasi atau hubungi admin.');
+          return;
+        }
+        verifiedPortalAddress = normalizePortalAddress(portalSnapshot.portalAddress || portalAddress);
       }
 
       const normalizedPortalAddress = role === 'admin'
-        ? `${portalAddress.trim().toLowerCase().replace(/\.majo\.id$/, '')}.majo.id`
-        : portalAddress.trim();
+        ? verifiedPortalAddress
+        : verifiedPortalAddress || normalizePortalAddress(portalAddress.trim());
 
       const newAccount: RegisteredAccount = {
         name: name.trim(),
         username: username.trim().toLowerCase(),
-        email: email.trim().toLowerCase() || undefined,
+        email: role === 'admin' ? email.trim().toLowerCase() || undefined : undefined,
         password,
         role,
         portalAddress: normalizedPortalAddress,
@@ -190,20 +214,13 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       if (role === 'admin') {
         const principal = username.trim().toLowerCase();
         setActivePortalAddress(normalizedPortalAddress, principal);
-        savePortalConfig(updatedPortalConfig, normalizedPortalAddress);
       }
 
-      if (isFirebaseConfigured) {
-        await registerAccountWithFirebase(newAccount, password);
-        if (role === 'admin') {
-          await savePortalConfigToFirestore(updatedPortalConfig);
-        }
-      } else {
-        const stored = localStorage.getItem('majo_accounts');
-        const accounts = stored ? JSON.parse(stored) : [];
-        accounts.push(newAccount);
-        localStorage.setItem('majo_accounts', JSON.stringify(accounts));
-      }
+      newAccount.uid = await registerAccountWithFirebase(
+        newAccount,
+        password,
+        role === 'admin' ? adminInviteCode : undefined
+      );
 
       setIsLoading(false);
       setSuccessAccount(newAccount);
@@ -292,16 +309,13 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     Peran: Administrator Perusahaan
                   </h4>
                   <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                    Buat Portal Baru
+                    {isFirebaseConfigured ? 'Undangan Admin' : 'Buat Portal Baru'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  Membuat domain portal baru (
-                  <span className="font-mono text-blue-600 font-semibold">
-                    nama-kantor.majo.id
-                  </span>
-                  ), mengatur skema wilayah operasional, membuat job assignment (PM), dan mengelola
-                  persetujuan akun staf.
+                  {isFirebaseConfigured
+                    ? 'Bergabung sebagai administrator pada portal yang ditentukan oleh kode undangan sekali pakai dari admin aktif.'
+                    : <>Membuat domain portal baru (<span className="font-mono text-blue-600 font-semibold">nama-kantor.majo.id</span>), mengatur skema wilayah operasional, membuat job assignment (PM), dan mengelola persetujuan akun staf.</>}
                 </p>
               </div>
             </div>
@@ -380,7 +394,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
             </h2>
             <p className="text-xs text-slate-500 mt-1">
               {role === 'admin'
-                ? 'Buat portal baru dan konfigurasikan lokasi kerja perusahaan Anda'
+                ? isFirebaseConfigured
+                  ? 'Gunakan undangan dari administrator portal yang sudah aktif'
+                  : 'Buat portal baru dan konfigurasikan lokasi kerja perusahaan Anda'
                 : 'Masukkan tautan portal resmi admin dan pilih wilayah penugasan Anda'}
             </p>
           </div>
@@ -474,7 +490,58 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
               )}
 
               {/* 1. PORTAL ADDRESS FIELD (Dinamis: CREATE vs INPUT dengan Validasi Sistem) */}
-              <div>
+              {role === 'admin' && isFirebaseConfigured && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label htmlFor="reg-admin-invite" className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      KODE UNDANGAN ADMIN
+                    </label>
+                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                      Sekali Pakai
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    id="reg-admin-invite"
+                    value={adminInviteCode}
+                    onChange={(event) => setAdminInviteCode(event.target.value.toUpperCase())}
+                    placeholder="Tempel kode dari admin portal"
+                    autoComplete="off"
+                    required
+                    className="w-full px-4 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-full text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all shadow-2xs"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1 pl-3">Kode berlaku 7 hari dan hanya dapat dipakai satu kali.</p>
+                  <div className="mt-3">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label htmlFor="reg-portal" className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                        CREATE PORTAL ADDRESS
+                      </label>
+                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-600">Khusus Admin</span>
+                    </div>
+                    <div className="relative flex items-center">
+                      <span className="absolute left-4 text-slate-400">
+                        <span className="material-symbols-outlined text-[18px]">domain</span>
+                      </span>
+                      <input
+                        type="text"
+                        id="reg-portal"
+                        value={portalAddress}
+                        onChange={(event) => setPortalAddress(event.target.value.replace(/(?:\.majo\.id)+$/i, ''))}
+                        placeholder="nama-perusahaan"
+                        autoComplete="off"
+                        required
+                        className="w-full rounded-full border border-slate-200 bg-[#f8fafc] py-2.5 pl-11 pr-24 text-sm text-slate-800 placeholder:text-slate-400 shadow-2xs transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                      <span className="absolute right-4 text-sm font-semibold text-slate-500">.majo.id</span>
+                    </div>
+                    <p className="mt-1 pl-3 text-[11px] text-slate-400">
+                      Boleh memakai portal dari undangan atau alamat baru. Sistem menambahkan akhiran <span className="font-semibold">.majo.id</span>.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {(role !== 'admin' || !isFirebaseConfigured) && <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label
                     id="portal-field-label"
@@ -510,19 +577,24 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     type="text"
                     id="reg-portal"
                     value={portalAddress}
-                    onChange={(e) => setPortalAddress(e.target.value)}
+                    onChange={(e) => setPortalAddress(role === 'admin'
+                      ? e.target.value.replace(/(?:\.majo\.id)+$/i, '')
+                      : e.target.value)}
                     placeholder={
                       role === 'admin'
-                        ? 'Contoh: pt-majo-logistik-indo'
+                        ? 'nama-perusahaan'
                         : 'portal.majo.id/org/pt-majo-logistik-indo'
                     }
                     required
-                    className={`w-full pl-11 pr-4 py-2.5 bg-[#f8fafc] border rounded-full text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all shadow-2xs ${
+                    className={`w-full pl-11 ${role === 'admin' ? 'pr-24' : 'pr-4'} py-2.5 bg-[#f8fafc] border rounded-full text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all shadow-2xs ${
                       role === 'user' && !isPortalValid && portalAddress.trim().length > 0
                         ? 'border-rose-400 focus:ring-rose-500/20'
                         : 'border-slate-200 focus:ring-blue-500/20 focus:border-blue-500'
                     }`}
                   />
+                  {role === 'admin' && (
+                    <span className="absolute right-4 text-sm font-semibold text-slate-500">.majo.id</span>
+                  )}
                 </div>
                 {role === 'user' && !isPortalValid && portalAddress.trim().length > 0 && (
                   <p className="text-[11px] text-rose-600 mt-1 pl-3 font-medium">
@@ -540,7 +612,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     Sistem akan selalu menambahkan akhiran <span className="font-semibold">.majo.id</span> pada alamat portal.
                   </p>
                 )}
-              </div>
+              </div>}
 
               {/* 2. CHOOSE LOCATION (Khusus User: Single Wilayah Only, No Groups) */}
               {role === 'user' && (
@@ -611,7 +683,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                 </div>
               </div>
 
-              {(role === 'admin' || isFirebaseConfigured) && (
+              {role === 'admin' && (
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label htmlFor="reg-email" className="text-xs font-bold text-slate-700 uppercase tracking-wider">

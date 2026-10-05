@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "portalId", "order": "ASCENDING" },
+        { "fieldPath": "targetWilayahList", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "completedReports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "submittedBy", "order": "ASCENDING" },
+        { "fieldPath": "portalId", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

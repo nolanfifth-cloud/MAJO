@@ -1,5 +1,36 @@
 import { PmItem, RegionConfig, RegisteredAccount } from '../types';
 
+export function parseLegacyAreaDetails(regions?: string): NonNullable<PmItem['targetAreaDetails']> {
+  const areas = new Map<string, NonNullable<PmItem['targetAreaDetails']>[number]>();
+  (regions || '').split(',').map((entry) => entry.trim()).filter(Boolean).forEach((entry) => {
+    const [location, subLocation, ...placeParts] = entry.split('/').map((part) => part.trim()).filter(Boolean);
+    if (!location) return;
+    const area = areas.get(location) || { location, subLocations: [] };
+    if (subLocation) {
+      const place = placeParts.join(' / ');
+      const existingSubLocation = area.subLocations.find((item) => item.name === subLocation);
+      if (existingSubLocation) {
+        if (place && !existingSubLocation.places.includes(place)) existingSubLocation.places.push(place);
+      } else {
+        area.subLocations.push({ name: subLocation, places: place ? [place] : [] });
+      }
+    }
+    areas.set(location, area);
+  });
+  return [...areas.values()];
+}
+
+export function clearTemporaryBrowserCache(): number {
+  try {
+    const keysToRemove = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .filter((key): key is string => Boolean(key && /cache|temp|draft/i.test(key)));
+    keysToRemove.forEach((key) => localStorage.removeItem(key));
+    return keysToRemove.length;
+  } catch {
+    return 0;
+  }
+}
+
 export type PmTypeKey =
   | 'suhu_ruangan'
   | 'pac_ac'

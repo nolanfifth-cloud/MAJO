@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
-import { AuthView } from '../types';
-import { isFirebaseConfigured, sendFirebasePasswordReset } from '../services/firebase';
+import { AuthView, ResetTicket } from '../types';
+import { isFirebaseConfigured, submitPasswordResetRequest } from '../services/firebase';
 
-const LOGO_URL = '/assets/logo%20MAJO.png';
+const LOGO_URL = '/assets/Logo%20MAJO.png';
 
 interface ForgotPasswordViewProps {
   onNavigate: (view: AuthView) => void;
 }
 
 export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNavigate }) => {
+  const isCloudResetRequest = isFirebaseConfigured && !import.meta.env.DEV;
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
+  const [portalAddress, setPortalAddress] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -27,32 +28,58 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
       return;
     }
 
-    if (isFirebaseConfigured) {
-      if (!email.trim()) {
-        setErrorMessage('Masukkan email admin terdaftar untuk menerima tautan reset password.');
+    if (isCloudResetRequest) {
+      if (!portalAddress.trim()) {
+        setErrorMessage('Masukkan alamat portal tempat akun terdaftar.');
         return;
       }
       setIsLoading(true);
       try {
-        await sendFirebasePasswordReset(email);
-        setTicketId('RESET-FIREBASE');
+        const submittedTicketId = await submitPasswordResetRequest({
+          username: username.trim(),
+          portalAddress: portalAddress.trim(),
+          employeeId: employeeId.trim() || undefined,
+          notes: notes.trim() || undefined,
+        });
+        setTicketId(submittedTicketId);
         setIsSubmitted(true);
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Email reset password gagal dikirim.');
+        setErrorMessage(error instanceof Error ? error.message : 'Permintaan reset password gagal dikirim.');
       } finally {
         setIsLoading(false);
       }
       return;
     }
-    setErrorMessage('Firebase belum dikonfigurasi. Hubungkan Firebase Authentication untuk mengirim email reset password.');
+
+    const localTicketId = `RESET-LOCAL-${Date.now().toString(36).toUpperCase()}`;
+    const ticket: ResetTicket = {
+      ticketId: localTicketId,
+      username: username.trim(),
+      portalAddress: portalAddress.trim() || undefined,
+      employeeId: employeeId.trim() || undefined,
+      notes: notes.trim() || undefined,
+      submittedAt: new Date().toISOString(),
+      status: 'pending',
+    };
+    try {
+      const storedTickets = JSON.parse(localStorage.getItem('majo_reset_tickets') || '[]') as ResetTicket[];
+      const tickets = Array.isArray(storedTickets) ? storedTickets : [];
+      localStorage.setItem('majo_reset_tickets', JSON.stringify([...tickets, ticket]));
+      setTicketId(localTicketId);
+      setIsSubmitted(true);
+    } catch {
+      setErrorMessage('Simulasi gagal menyimpan tiket di browser. Periksa kapasitas penyimpanan lokal.');
+    }
   };
 
   const handleResetFormState = () => {
     setUsername('');
-    setEmail('');
+    setPortalAddress('');
     setEmployeeId('');
     setNotes('');
     setIsSubmitted(false);
+    setTicketId('');
+    setErrorMessage('');
   };
 
   return (
@@ -167,7 +194,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
               </span>
             </div>
             <p className="text-xs text-secondary leading-normal">
-              Seluruh data transmisi dilindungi enkripsi SHA-256 internal. © 2025 MAJO Portal. Hak
+              Permintaan reset diverifikasi administrator dan password diperbarui melalui Firebase Authentication. © 2025 MAJO Portal. Hak
               Cipta Dilindungi Undang-Undang.
             </p>
           </div>
@@ -205,7 +232,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                   </div>
                   <div>
                     <p className="text-base font-bold text-on-surface">
-                      Link Reset Password Terkirim
+                      Permintaan Reset Tercatat
                     </p>
                     <p className="text-xs text-secondary">
                       Tiket antrean ID:{' '}
@@ -216,9 +243,11 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                   </div>
                 </div>
                 <p className="text-sm text-on-surface-variant leading-relaxed">
-                  Tautan untuk mengganti password akun <strong className="text-on-surface">@{username}</strong> telah
-                  dikirim ke <strong className="text-on-surface">{email}</strong>. Buka Gmail tersebut dan ikuti
-                  instruksi Firebase untuk membuat password baru.
+                  {isCloudResetRequest ? (
+                    <>Permintaan akun <strong className="text-on-surface">@{username}</strong> telah dikirim ke admin portal <strong className="text-on-surface">{portalAddress}</strong>. Password baru hanya dibuat setelah admin memverifikasi tiket ini.</>
+                  ) : (
+                    <>Ini simulasi localhost untuk akun <strong className="text-on-surface">@{username}</strong>. Tiket tersimpan di browser, tetapi tidak ada email yang dikirim dan password tidak diubah.</>
+                  )}
                 </p>
                 <div className="pt-3 flex flex-col sm:flex-row gap-3">
                   <button
@@ -257,7 +286,7 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                     className="flex items-center justify-between text-xs font-bold text-on-surface uppercase tracking-wider"
                     htmlFor="usernameInput"
                   >
-                      <span>Username Akun Admin</span>
+                      <span>Username Akun MAJO</span>
                     <span className="text-[10px] text-error font-semibold">Wajib Diisi</span>
                   </label>
                   <div className="relative flex items-center">
@@ -276,32 +305,31 @@ export const ForgotPasswordView: React.FC<ForgotPasswordViewProps> = ({ onNaviga
                     />
                   </div>
                   <p className="text-xs text-secondary">
-                    Username terdaftar yang biasa digunakan untuk login sistem operasional.
+                    Username terdaftar pada portal yang ingin dipulihkan.
                   </p>
                 </div>
 
                 {/* Admin self-service recovery fields */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs font-bold text-on-surface uppercase tracking-wider" htmlFor="emailInput">
-                      Email Admin Terdaftar
+                    <label className="text-xs font-bold text-on-surface uppercase tracking-wider" htmlFor="portalAddressInput">
+                      Alamat Portal
                     </label>
-                    <span className="px-2 py-0.5 rounded-full bg-primary-fixed text-on-primary-fixed text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
-                      Khusus admin
-                    </span>
                   </div>
                   <input
                     className="w-full h-14 px-4 bg-surface-container-low rounded-2xl text-on-surface text-base placeholder:text-outline outline-none border border-transparent focus:border-outline-variant/30"
-                    id="emailInput"
-                    name="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Email Gmail admin terdaftar"
-                    required
-                    type="email"
+                    id="portalAddressInput"
+                    name="portalAddress"
+                    value={portalAddress}
+                    onChange={(e) => setPortalAddress(e.target.value)}
+                    placeholder="nama-portal.majo.id"
+                    required={isCloudResetRequest}
+                    type="text"
                   />
                   <p className="text-xs text-secondary">
-                    Tautan untuk mengganti password akan dikirim ke Gmail ini.
+                    {isCloudResetRequest
+                      ? 'Admin portal akan melihat tiket setelah memverifikasi akun.'
+                      : 'Opsional untuk simulasi localhost; tiket hanya tersimpan di browser ini.'}
                   </p>
                 </div>
 
