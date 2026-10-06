@@ -397,13 +397,15 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       text: trimmed,
       hasPhoto: togglePhoto,
       hasCondition: toggleCondition || toggleLogicCondition,
-      conditionMode: toggleCondition && toggleLogicCondition
-        ? 'both'
-        : toggleLogicCondition
-          ? 'logic'
-          : toggleCondition
-            ? 'options'
-            : undefined,
+      ...(toggleCondition || toggleLogicCondition
+        ? {
+          conditionMode: toggleCondition && toggleLogicCondition
+            ? 'both'
+            : toggleLogicCondition
+              ? 'logic'
+              : 'options',
+        }
+        : {}),
       conditionOptions: toggleCondition ? conditionOptions : [],
       conditionLogic: toggleLogicCondition ? logicRanges : [],
       conditionText: [
@@ -723,7 +725,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
         </div>
       )}
 
-      {/* Publish Success Modal */}
+      {/* Publish Confirmation Modal */}
       {isPublishSuccessOpen && (
         <div className="fixed inset-0 z-[9000] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-surface-container-lowest rounded-xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4 border border-outline-variant/30 animate-in zoom-in-95 duration-150">
@@ -732,7 +734,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
                   <span className="material-symbols-outlined text-[24px]">check_circle</span>
                 </div>
-                <h3 className="font-headline-md text-headline-md text-on-surface">Pekerjaan Berhasil Diterbitkan!</h3>
+                <h3 className="font-headline-md text-headline-md text-on-surface">Konfirmasi Penerbitan Pekerjaan</h3>
               </div>
               <button
                 type="button"
@@ -764,11 +766,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   <strong>Total Checklist:</strong> {subtasks.length} Sub-Tugas, {allChecklistItems.length} Something To Do
                 </p>
                 <p>
-                  <strong>Status:</strong> Terpublikasi ke Portal Lapangan (Active Sync)
+                  <strong>Status:</strong> Menunggu konfirmasi penerbitan
                 </p>
               </div>
               <p className="font-body-md text-on-surface">
-                Pekerjaan Berhasil Diterbitkan! Tautan penugasan aktif dan siap dikerjakan oleh teknisi lapangan.
+                Periksa ringkasan pekerjaan. Tekan tombol di bawah untuk menyimpan dan menerbitkannya ke portal lapangan.
               </p>
             </div>
 
@@ -778,7 +780,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 onClick={handleConfirmPublish}
                 className="px-6 py-2.5 rounded-DEFAULT bg-[#091c33] text-white font-label-md text-label-md hover:bg-primary-container transition-all shadow cursor-pointer font-semibold"
               >
-                Selesai & Ke Dashboard
+                Terbitkan & Ke Dashboard
               </button>
             </div>
           </div>
