@@ -140,11 +140,8 @@ export const ProfilTeknisiView: React.FC<ProfilTeknisiViewProps> = ({
                 <span>Data Akun</span>
               </div>
             </div>
-                  disabled={isChangingPassword}
-                  className="w-full py-3.5 rounded-xl bg-[#0C1B33] hover:bg-slate-800 text-white font-bold text-sm transition shadow-md shadow-blue-900/10 flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-60 disabled:cursor-wait"
             {/* Profile Card Details */}
             <div className="p-6 space-y-5">
-                  <span>{isChangingPassword ? 'Memperbarui...' : 'Simpan Perubahan Password'}</span>
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-start space-x-3.5">
                 <div className="w-9 h-9 rounded-xl bg-[#0C1B33] text-white flex items-center justify-center shrink-0 text-sm mt-0.5">
                   <Server className="w-4 h-4 text-sky-400" />

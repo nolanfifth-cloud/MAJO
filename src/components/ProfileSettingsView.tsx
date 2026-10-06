@@ -784,7 +784,6 @@ export const ProfileSettingsView: React.FC<ProfileSettingsViewProps> = ({
                     className="w-full py-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-wait"
                   >
                     {isChangingPassword ? 'Memperbarui...' : 'Simpan Perubahan Password'}
-                    <span>Simpan Perubahan Password</span>
                   </button>
                 </div>
               </form>
