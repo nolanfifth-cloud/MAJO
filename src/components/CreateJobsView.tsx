@@ -34,6 +34,13 @@ const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
 const INITIAL_SUBTASKS: SubtaskGroup[] = [];
 const INITIAL_BRANCHES: Branch[] = [];
 
+const toggleSetEntry = <T,>(current: Set<T>, entry: T): Set<T> => {
+  const next = new Set(current);
+  if (next.has(entry)) next.delete(entry);
+  else next.add(entry);
+  return next;
+};
+
 const mapConfigToBranches = (config?: { masterWilayah?: string[]; masterGroups?: RegionConfig[] }): Branch[] => {
   if (!config) return INITIAL_BRANCHES;
 
@@ -85,9 +92,13 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const [activeSubtaskId, setActiveSubtaskId] = useState('');
   const [branches, setBranches] = useState<Branch[]>(INITIAL_BRANCHES);
   const [regionNames, setRegionNames] = useState<string[]>([]);
+  const [expandedRegions, setExpandedRegions] = useState<Set<'sor1' | 'sor2'>>(new Set());
+  const [expandedBranches, setExpandedBranches] = useState<Set<string>>(new Set());
+  const [expandedSubLocations, setExpandedSubLocations] = useState<Set<string>>(new Set());
 
   // New item form state
   const [newItemText, setNewItemText] = useState('');
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [conditionOptions, setConditionOptions] = useState<string[]>([]);
   const [newConditionOption, setNewConditionOption] = useState('');
   const [logicRanges, setLogicRanges] = useState<ConditionLogicRange[]>([]);
@@ -312,6 +323,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     };
     setSubtasks((previous) => [...previous, subtask]);
     setActiveSubtaskId(subtask.id);
+    if (editingItemId) resetChecklistEditor();
     setNewSubtaskTitle('');
     setConditionOptions([]);
     setNewConditionOption('');
@@ -325,19 +337,78 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const handleDeleteSubtask = (subtaskId: string) => {
     setSubtasks((previous) => {
       const remaining = previous.filter((subtask) => subtask.id !== subtaskId);
-      if (activeSubtaskId === subtaskId) setActiveSubtaskId(remaining[0]?.id || '');
+      if (activeSubtaskId === subtaskId) {
+        setActiveSubtaskId(remaining[0]?.id || '');
+        if (editingItemId) resetChecklistEditor();
+      }
       return remaining;
     });
     showToast('Sub-Tugas dan item di dalamnya dihapus.', 'info');
   };
 
   const handleDeleteItem = (subtaskId: string, itemId: string) => {
+    if (editingItemId === itemId) resetChecklistEditor();
     setSubtasks((previous) => previous.map((subtask) =>
       subtask.id === subtaskId
         ? { ...subtask, items: subtask.items.filter((item) => item.id !== itemId) }
         : subtask
     ));
     showToast('Something To Do dihapus.', 'info');
+  };
+
+  const handleSelectSubtask = (subtaskId: string) => {
+    if (editingItemId) resetChecklistEditor();
+    setActiveSubtaskId(subtaskId);
+  };
+
+  const handleEditItem = (item: ChecklistItem) => {
+    setEditingItemId(item.id);
+    setNewItemText(item.text);
+    setTogglePhoto(item.hasPhoto);
+    setToggleTimestamp(item.hasTimestamp);
+    setToggleNotes(Boolean(item.hasNotes));
+    const conditionOptionsForItem = item.conditionOptions || [];
+    const conditionLogicForItem = item.conditionLogic || [];
+    setToggleCondition(item.conditionMode
+      ? item.conditionMode === 'options' || item.conditionMode === 'both'
+      : conditionOptionsForItem.length > 0);
+    setToggleLogicCondition(item.conditionMode
+      ? item.conditionMode === 'logic' || item.conditionMode === 'both'
+      : conditionLogicForItem.length > 0);
+    setConditionOptions([...conditionOptionsForItem]);
+    setLogicRanges([...conditionLogicForItem]);
+    setNewConditionOption('');
+    setNewLogicRange({ min: '', max: '', output: '' });
+  };
+
+  const handleMoveItem = (subtaskId: string, itemIndex: number, direction: -1 | 1) => {
+    setSubtasks((previous) => previous.map((subtask) => {
+      if (subtask.id !== subtaskId) return subtask;
+      const nextIndex = itemIndex + direction;
+      if (nextIndex < 0 || nextIndex >= subtask.items.length) return subtask;
+      const items = [...subtask.items];
+      [items[itemIndex], items[nextIndex]] = [items[nextIndex], items[itemIndex]];
+      return { ...subtask, items };
+    }));
+  };
+
+  const resetChecklistEditor = () => {
+    setEditingItemId(null);
+    setNewItemText('');
+    setConditionOptions([]);
+    setNewConditionOption('');
+    setLogicRanges([]);
+    setNewLogicRange({ min: '', max: '', output: '' });
+    setTogglePhoto(true);
+    setToggleCondition(true);
+    setToggleLogicCondition(false);
+    setToggleTimestamp(true);
+    setToggleNotes(false);
+  };
+
+  const handleCancelChecklistEdit = () => {
+    resetChecklistEditor();
+    showToast('Perubahan Something To Do dibatalkan.', 'info');
   };
 
   const handleAddConditionOption = () => {
@@ -392,8 +463,9 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       showToast('Tambahkan minimal satu Rentang Logika Kondisi.', 'error');
       return;
     }
+    const itemId = editingItemId || `item-${crypto.randomUUID()}`;
     const newItem: ChecklistItem = {
-      id: `item-${crypto.randomUUID()}`,
+      id: itemId,
       text: trimmed,
       hasPhoto: togglePhoto,
       hasCondition: toggleCondition || toggleLogicCondition,
@@ -417,17 +489,20 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       notesText: toggleNotes ? 'Catatan Petugas' : '',
     };
 
-    setSubtasks((previous) => previous.map((subtask) =>
-      subtask.id === activeSubtask.id
-        ? { ...subtask, items: [...subtask.items, newItem] }
-        : subtask
-    ));
-    setNewItemText('');
-    setConditionOptions([]);
-    setNewConditionOption('');
-    setLogicRanges([]);
-    setNewLogicRange({ min: '', max: '', output: '' });
-    showToast('Something To Do ditambahkan ke Sub-Tugas.');
+    setSubtasks((previous) => previous.map((subtask) => {
+      if (subtask.id !== activeSubtask.id) return subtask;
+      return {
+        ...subtask,
+        items: editingItemId
+          ? subtask.items.map((item) => item.id === editingItemId ? newItem : item)
+          : [...subtask.items, newItem],
+      };
+    }));
+    const wasEditing = Boolean(editingItemId);
+    resetChecklistEditor();
+    showToast(wasEditing
+      ? 'Konfigurasi Something To Do diperbarui.'
+      : 'Something To Do ditambahkan ke Sub-Tugas.');
   };
 
   // Reset Form
@@ -555,37 +630,68 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
 
   const renderBranch = (branch: Branch) => (
     <div key={branch.id} className="flex flex-col gap-2">
-      <label className="flex items-center gap-2.5 text-on-surface cursor-pointer select-none hover:text-primary transition-colors">
-        <input
-          type="checkbox"
-          checked={branch.checked}
-          ref={(element) => {
-            if (element) element.indeterminate = !branch.checked && hasBranchSelection(branch);
-          }}
-          onChange={(event) => handleToggleBranch(branch.id, event.target.checked)}
-          className="accent-primary w-4 h-4 rounded cursor-pointer"
-        />
-        <span className="font-body-md text-body-md font-medium">{branch.name}</span>
-      </label>
-      {branch.subLocations.length > 0 && (
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex min-w-0 items-center gap-2.5 text-on-surface cursor-pointer select-none hover:text-primary transition-colors">
+          <input
+            type="checkbox"
+            checked={branch.checked}
+            ref={(element) => {
+              if (element) element.indeterminate = !branch.checked && hasBranchSelection(branch);
+            }}
+            onChange={(event) => handleToggleBranch(branch.id, event.target.checked)}
+            className="accent-primary w-4 h-4 shrink-0 rounded cursor-pointer"
+          />
+          <span className="truncate font-body-md text-body-md font-medium">{branch.name}</span>
+        </label>
+        {branch.subLocations.length > 0 && (
+          <button
+            type="button"
+            aria-label={`${expandedBranches.has(branch.id) ? 'Ciutkan' : 'Buka'} lokasi ${branch.name}`}
+            aria-expanded={expandedBranches.has(branch.id)}
+            onClick={() => setExpandedBranches((previous) => toggleSetEntry(previous, branch.id))}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-container"
+          >
+            <span className="material-symbols-outlined text-[20px]">
+              {expandedBranches.has(branch.id) ? 'expand_less' : 'expand_more'}
+            </span>
+          </button>
+        )}
+      </div>
+      {branch.subLocations.length > 0 && expandedBranches.has(branch.id) && (
         <div className="ml-6 flex flex-col gap-2 border-l-2 border-outline-variant/30 pl-3">
           {branch.subLocations.map((subLocation) => {
             const hasSelection = subLocation.checked || subLocation.places.some((place) => place.checked);
+            const expandedKey = `${branch.id}:${subLocation.id}`;
             return (
               <div key={subLocation.id} className="flex flex-col gap-2">
-                <label className="flex items-center gap-2 text-on-surface-variant cursor-pointer select-none hover:text-primary">
-                  <input
-                    type="checkbox"
-                    checked={subLocation.checked}
-                    ref={(element) => {
-                      if (element) element.indeterminate = !subLocation.checked && hasSelection;
-                    }}
-                    onChange={(event) => handleToggleSubLocation(branch.id, subLocation.id, event.target.checked)}
-                    className="accent-primary w-4 h-4 rounded cursor-pointer"
-                  />
-                  <span className="font-body-sm text-body-sm">{subLocation.name}</span>
-                </label>
-                {subLocation.places.length > 0 && (
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex min-w-0 items-center gap-2 text-on-surface-variant cursor-pointer select-none hover:text-primary">
+                    <input
+                      type="checkbox"
+                      checked={subLocation.checked}
+                      ref={(element) => {
+                        if (element) element.indeterminate = !subLocation.checked && hasSelection;
+                      }}
+                      onChange={(event) => handleToggleSubLocation(branch.id, subLocation.id, event.target.checked)}
+                      className="accent-primary w-4 h-4 shrink-0 rounded cursor-pointer"
+                    />
+                    <span className="truncate font-body-sm text-body-sm">{subLocation.name}</span>
+                  </label>
+                  {subLocation.places.length > 0 && (
+                    <button
+                      type="button"
+                      aria-label={`${expandedSubLocations.has(expandedKey) ? 'Ciutkan' : 'Buka'} sub-lokasi ${subLocation.name}`}
+                      aria-expanded={expandedSubLocations.has(expandedKey)}
+                      onClick={() => setExpandedSubLocations((previous) => toggleSetEntry(previous, expandedKey))}
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-container"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">
+                        {expandedSubLocations.has(expandedKey) ? 'expand_less' : 'expand_more'}
+                      </span>
+                    </button>
+                  )}
+                </div>
+                {subLocation.places.length > 0 && expandedSubLocations.has(expandedKey) && (
                   <div className="ml-6 flex flex-col gap-2 border-l border-outline-variant/30 pl-3">
                     {subLocation.places.map((place) => (
                       <label key={place.id} className="flex items-center gap-2 text-secondary cursor-pointer select-none hover:text-primary">
@@ -862,7 +968,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
 
             {/* Card 2: Date Range & Execution Schedule */}
             <div className="p-6 rounded-DEFAULT bg-surface-container-lowest shadow-xs flex flex-col gap-5 border border-outline-variant/30">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-full bg-tertiary/10 flex items-center justify-center text-tertiary">
                     <span className="material-symbols-outlined text-[20px]">calendar_month</span>
@@ -883,7 +989,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 </span>
               </div>
 
-              <div className={`grid ${slaEnabled ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+              <div className={`grid ${slaEnabled ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'} gap-3`}>
                 {/* Tanggal Mulai */}
                 <div className="flex flex-col gap-1.5">
                   <label
@@ -892,11 +998,10 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   >
                     {slaEnabled ? 'Tanggal Mulai' : 'Tanggal Pelaksanaan'}
                   </label>
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-DEFAULT bg-surface-container-low text-on-surface font-body-md text-body-md focus-within:ring-1 focus-within:ring-primary transition-all border border-outline-variant/20">
-                    <span className="material-symbols-outlined text-outline text-[18px]">event</span>
+                  <div className="flex min-w-0 items-center px-3 py-2 rounded-DEFAULT bg-surface-container-low text-on-surface font-body-md text-body-md focus-within:ring-1 focus-within:ring-primary transition-all border border-outline-variant/20">
                     <input
                       id="job-start-date"
-                      className="bg-transparent border-none outline-none w-full text-on-surface font-body-md cursor-pointer"
+                      className="min-w-0 w-full bg-transparent border-none outline-none text-on-surface font-body-md cursor-pointer"
                       type="date"
                       value={startDate}
                       onChange={(e) => handleDateChange('start', e.target.value)}
@@ -913,12 +1018,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     Tanggal Berakhir
                   </label>
                   <div
-                    className="flex items-center gap-2 px-3 py-2 rounded-DEFAULT bg-surface-container-low text-on-surface font-body-md text-body-md transition-all border border-outline-variant/20 focus-within:ring-1 focus-within:ring-primary"
+                    className="flex min-w-0 items-center px-3 py-2 rounded-DEFAULT bg-surface-container-low text-on-surface font-body-md text-body-md transition-all border border-outline-variant/20 focus-within:ring-1 focus-within:ring-primary"
                   >
-                    <span className="material-symbols-outlined text-outline text-[18px]">event_available</span>
                     <input
                       id="job-end-date"
-                      className="bg-transparent border-none outline-none w-full text-on-surface font-body-md cursor-pointer"
+                      className="min-w-0 w-full bg-transparent border-none outline-none text-on-surface font-body-md cursor-pointer"
                       type="date"
                       value={endDate}
                       onChange={(e) => handleDateChange('end', e.target.value)}
@@ -1024,62 +1128,86 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
               <div className="flex flex-col gap-3">
                 {/* Region 1: SOR 1 */}
                 <div className="flex flex-col rounded-DEFAULT bg-surface-container-low overflow-hidden border border-outline-variant/30">
-                  <div className="flex items-center justify-between p-3.5 bg-surface-container">
-                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                      <input
-                        className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        id="region-sor1-master"
-                        type="checkbox"
-                        checked={isSor1AllChecked}
-                        ref={(el) => {
-                          if (el) el.indeterminate = isSor1Indeterminate;
-                        }}
-                        onChange={(e) => handleToggleRegion('sor1', e.target.checked)}
-                      />
-                      <span className="font-label-md text-label-md font-bold text-on-surface">
-                        {regionNames[0] || 'Wilayah 1'}
+                  <div className="flex items-center justify-between gap-3 p-3.5 bg-surface-container">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <label className="flex min-w-0 items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          className="accent-primary w-4 h-4 shrink-0 rounded cursor-pointer"
+                          id="region-sor1-master"
+                          type="checkbox"
+                          checked={isSor1AllChecked}
+                          ref={(el) => {
+                            if (el) el.indeterminate = isSor1Indeterminate;
+                          }}
+                          onChange={(e) => handleToggleRegion('sor1', e.target.checked)}
+                        />
+                        <span className="truncate font-label-md text-label-md font-bold text-on-surface">
+                          {regionNames[0] || 'Wilayah 1'}
+                        </span>
+                      </label>
+                      <span className="shrink-0 rounded bg-surface-container-lowest px-2 py-0.5 text-secondary font-label-sm text-label-sm font-medium" id="sor1-count">
+                        {sor1CheckedCount} / {sor1Branches.length}
                       </span>
-                    </label>
-                    <span
-                      className="px-2 py-0.5 rounded bg-surface-container-lowest text-secondary font-label-sm text-label-sm font-medium"
-                      id="sor1-count"
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`${expandedRegions.has('sor1') ? 'Ciutkan' : 'Buka'} ${regionNames[0] || 'Wilayah 1'}`}
+                      aria-expanded={expandedRegions.has('sor1')}
+                      onClick={() => setExpandedRegions((previous) => toggleSetEntry(previous, 'sor1'))}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-container-low"
                     >
-                      {sor1CheckedCount} / {sor1Branches.length} Lokasi
-                    </span>
+                      <span className="material-symbols-outlined text-[20px]">
+                        {expandedRegions.has('sor1') ? 'expand_less' : 'expand_more'}
+                      </span>
+                    </button>
                   </div>
-                  <div className="flex flex-col p-3 gap-2.5 pl-8 bg-surface-container-lowest/40">
-                    {sor1Branches.map(renderBranch)}
-                  </div>
+                  {expandedRegions.has('sor1') && (
+                    <div className="flex flex-col gap-2.5 bg-surface-container-lowest/40 p-3 pl-8">
+                      {sor1Branches.map(renderBranch)}
+                    </div>
+                  )}
                 </div>
 
                 {/* Region 2: SOR 2 */}
                 <div className="flex flex-col rounded-DEFAULT bg-surface-container-low overflow-hidden border border-outline-variant/30">
-                  <div className="flex items-center justify-between p-3.5 bg-surface-container">
-                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                      <input
-                        className="accent-primary w-4 h-4 rounded cursor-pointer"
-                        id="region-sor2-master"
-                        type="checkbox"
-                        checked={isSor2AllChecked}
-                        ref={(el) => {
-                          if (el) el.indeterminate = isSor2Indeterminate;
-                        }}
-                        onChange={(e) => handleToggleRegion('sor2', e.target.checked)}
-                      />
-                      <span className="font-label-md text-label-md font-bold text-on-surface">
-                        {regionNames[1] || 'Wilayah 2'}
+                  <div className="flex items-center justify-between gap-3 p-3.5 bg-surface-container">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <label className="flex min-w-0 items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          className="accent-primary w-4 h-4 shrink-0 rounded cursor-pointer"
+                          id="region-sor2-master"
+                          type="checkbox"
+                          checked={isSor2AllChecked}
+                          ref={(el) => {
+                            if (el) el.indeterminate = isSor2Indeterminate;
+                          }}
+                          onChange={(e) => handleToggleRegion('sor2', e.target.checked)}
+                        />
+                        <span className="truncate font-label-md text-label-md font-bold text-on-surface">
+                          {regionNames[1] || 'Wilayah 2'}
+                        </span>
+                      </label>
+                      <span className="shrink-0 rounded bg-surface-container-lowest px-2 py-0.5 text-secondary font-label-sm text-label-sm font-medium" id="sor2-count">
+                        {sor2CheckedCount} / {sor2Branches.length}
                       </span>
-                    </label>
-                    <span
-                      className="px-2 py-0.5 rounded bg-surface-container-lowest text-secondary font-label-sm text-label-sm font-medium"
-                      id="sor2-count"
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`${expandedRegions.has('sor2') ? 'Ciutkan' : 'Buka'} ${regionNames[1] || 'Wilayah 2'}`}
+                      aria-expanded={expandedRegions.has('sor2')}
+                      onClick={() => setExpandedRegions((previous) => toggleSetEntry(previous, 'sor2'))}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-surface-container-low"
                     >
-                      {sor2CheckedCount} / {sor2Branches.length} Lokasi
-                    </span>
+                      <span className="material-symbols-outlined text-[20px]">
+                        {expandedRegions.has('sor2') ? 'expand_less' : 'expand_more'}
+                      </span>
+                    </button>
                   </div>
-                  <div className="flex flex-col p-3 gap-2.5 pl-8 bg-surface-container-lowest/40">
-                    {sor2Branches.map(renderBranch)}
-                  </div>
+                  {expandedRegions.has('sor2') && (
+                    <div className="flex flex-col gap-2.5 bg-surface-container-lowest/40 p-3 pl-8">
+                      {sor2Branches.map(renderBranch)}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1150,7 +1278,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     <button
                       key={subtask.id}
                       type="button"
-                      onClick={() => setActiveSubtaskId(subtask.id)}
+                      onClick={() => handleSelectSubtask(subtask.id)}
                       className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${
                         activeSubtask?.id === subtask.id
                           ? 'border-primary bg-primary/5 text-primary'
@@ -1184,7 +1312,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   {activeSubtask.items.length > 0 ? (
                     <div className="flex flex-col gap-2">
                       {activeSubtask.items.map((item, index) => (
-                        <div key={item.id} className="flex items-start justify-between gap-3 rounded-lg border border-outline-variant/30 bg-surface-container-lowest p-3">
+                        <div key={item.id} className="flex items-start justify-between gap-2 rounded-lg border border-outline-variant/30 bg-surface-container-lowest p-3">
                           <div className="flex min-w-0 items-start gap-3">
                             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-container text-xs font-bold text-on-surface-variant">{index + 1}</span>
                             <div className="min-w-0">
@@ -1197,14 +1325,42 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                               </div>
                             </div>
                           </div>
-                          <button
-                            aria-label={`Hapus ${item.text}`}
-                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-outline hover:bg-error-container hover:text-error"
-                            onClick={() => handleDeleteItem(activeSubtask.id, item.id)}
-                            type="button"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">close</span>
-                          </button>
+                          <div className="flex shrink-0 items-center gap-0.5">
+                            <button
+                              aria-label={`Pindahkan ${item.text} ke atas`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-35"
+                              disabled={index === 0}
+                              onClick={() => handleMoveItem(activeSubtask.id, index, -1)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">arrow_upward</span>
+                            </button>
+                            <button
+                              aria-label={`Pindahkan ${item.text} ke bawah`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-secondary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-35"
+                              disabled={index === activeSubtask.items.length - 1}
+                              onClick={() => handleMoveItem(activeSubtask.id, index, 1)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">arrow_downward</span>
+                            </button>
+                            <button
+                              aria-label={`Edit ${item.text}`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-primary hover:bg-primary/10"
+                              onClick={() => handleEditItem(item)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">edit</span>
+                            </button>
+                            <button
+                              aria-label={`Hapus ${item.text}`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-outline hover:bg-error-container hover:text-error"
+                              onClick={() => handleDeleteItem(activeSubtask.id, item.id)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">close</span>
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1212,11 +1368,23 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                     <p className="rounded-lg border border-dashed border-outline-variant/50 p-4 text-center text-sm text-secondary">Belum ada Something To Do di Sub-Tugas ini.</p>
                   )}
 
+                  {editingItemId && (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-primary/5 px-3 py-2 text-sm text-primary">
+                      <span>Mengedit konfigurasi Something To Do</span>
+                      <button
+                        type="button"
+                        onClick={handleCancelChecklistEdit}
+                        className="font-semibold hover:underline"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 border-t border-outline-variant/30 pt-4">
                     <input
                       aria-label="Something To Do"
                       className="min-w-0 flex-1 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-4 py-3 font-body-md text-body-md text-on-surface outline-none placeholder:text-outline focus:ring-1 focus:ring-primary"
-                      placeholder="Something to do"
+                      placeholder={editingItemId ? 'Edit Something To Do' : 'Something to do'}
                       value={newItemText}
                       onChange={(event) => setNewItemText(event.target.value)}
                       onKeyDown={(event) => {
@@ -1227,12 +1395,12 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                       }}
                     />
                     <button
-                      aria-label="Tambah Something To Do"
+                      aria-label={editingItemId ? 'Simpan perubahan Something To Do' : 'Tambah Something To Do'}
                       className="flex h-12 w-12 shrink-0 items-center justify-center rounded-DEFAULT bg-primary text-on-primary shadow-xs hover:bg-primary-container"
                       onClick={handleAddNewChecklist}
                       type="button"
                     >
-                      <span className="material-symbols-outlined text-[20px]">add</span>
+                      <span className="material-symbols-outlined text-[20px]">{editingItemId ? 'save' : 'add'}</span>
                     </button>
                   </div>
 
@@ -1246,7 +1414,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
               <div className="flex flex-col gap-4 rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest p-5 shadow-xs">
                 <div>
                   <h3 className="font-headline-md text-headline-md font-bold text-on-surface">Fitur respons petugas</h3>
-                  <p className="mt-1 text-sm text-secondary">Pengaturan ini diterapkan pada Something To Do yang akan ditambahkan.</p>
+                  <p className="mt-1 text-sm text-secondary">
+                    {editingItemId
+                      ? 'Perubahan akan diterapkan pada Something To Do yang sedang diedit.'
+                      : 'Pengaturan ini diterapkan pada Something To Do yang akan ditambahkan.'}
+                  </p>
                 </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
