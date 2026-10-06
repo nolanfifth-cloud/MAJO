@@ -814,7 +814,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <img
                   alt="MAJO Logo"
                   className="w-full h-full object-contain"
-                  src="/assets/Logo%20MAJO.png"
+                  src="/assets/logo%20MAJO.png"
                   referrerPolicy="no-referrer"
                 />
               </div>

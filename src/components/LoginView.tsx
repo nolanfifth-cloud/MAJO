@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AuthView, RegisteredAccount } from '../types';
 import { isFirebaseConfigured, loginWithFirebase } from '../services/firebase';
 
-const LOGO_URL = '/assets/Logo%20MAJO.png';
+const LOGO_URL = '/assets/logo%20MAJO.png';
 
 interface LoginViewProps {
   onNavigate: (view: AuthView) => void;
