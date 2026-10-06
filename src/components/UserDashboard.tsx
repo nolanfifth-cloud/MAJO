@@ -893,7 +893,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               <img
                 alt="MAJO Logo"
                 className="w-full h-full object-contain"
-                src="/assets/logo%20MAJO.png"
+                src="/assets/majo-logo.png"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src =
                     'https://lh3.googleusercontent.com/aida/AEtjO1UqoYl0lso8Lfc9d6sgwWr4n3xq8viIowOombtBvfCqwYHo4zjlkbyOkjx4SXPjRz6x-HvH-TAWx7YXFo5p0aoE9Y_oMLE8dk4Mxsx8ceh7WLK8jVFWQOl76wEmSc_jxosbBXkDDrEU8rXTFfG6zamQgfrA9_7q5LL3eLC8fAOYBMOEH5uDDyxDKLctrODYAXetDlOfIMXFXQVBNL5mzfQ1mpKBYH6I5b-Dd20QrOpX6oalDSsOmWYmygz2WL2myDCzCjDLTdttKpA';

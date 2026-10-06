@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AuthView, ResetTicket } from '../types';
 import { isFirebaseConfigured, submitPasswordResetRequest } from '../services/firebase';
 
-const LOGO_URL = '/assets/logo%20MAJO.png';
+const LOGO_URL = '/assets/majo-logo.png';
 
 interface ForgotPasswordViewProps {
   onNavigate: (view: AuthView) => void;

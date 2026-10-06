@@ -11,7 +11,7 @@ import {
 import { isFirebaseConfigured, registerAccountWithFirebase, resolveAdminInvitation } from '../services/firebase';
 import { loadPortalConfigFromFirestore } from '../services/firestoreStore';
 
-const LOGO_URL = '/assets/logo%20MAJO.png';
+const LOGO_URL = '/assets/majo-logo.png';
 const normalizePortalSlug = (value: string) => value
   .trim()
   .toLowerCase()
