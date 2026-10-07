@@ -46,6 +46,7 @@ import {
 interface DeviceItem {
   id: string;
   subtaskId: string;
+  subtaskTitle: string;
   taskTitle: string;
   pmType?: string;
   hasPhoto: boolean;
@@ -68,8 +69,6 @@ interface DeviceItem {
     keterangan: string;
     durasi: string;
     capturedAt: string;
-    latitude?: number;
-    longitude?: number;
   };
 }
 
@@ -93,6 +92,12 @@ interface UserProgressNotification {
   completedCount: number;
   totalCount: number;
 }
+
+const getSavedFormData = (value: unknown): Partial<DeviceItem['formData']> => {
+  if (!value || typeof value !== 'object') return {};
+  const { latitude: _latitude, longitude: _longitude, ...formData } = value as Record<string, unknown>;
+  return formData as Partial<DeviceItem['formData']>;
+};
 interface UserDashboardProps {
   onNavigate: (view: AuthView) => void;
   onLogout?: () => void;
@@ -264,12 +269,11 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                 : [];
             const id = `${subtaskId}_point_${itemIndex + 1}`;
             const savedDevice = savedDevicesById.get(id);
-            const savedFormData = savedDevice?.formData && typeof savedDevice.formData === 'object'
-              ? savedDevice.formData as Partial<DeviceItem['formData']>
-              : {};
+            const savedFormData = getSavedFormData(savedDevice?.formData);
             return {
               id,
               subtaskId,
+              subtaskTitle: module.name,
               taskTitle,
               pmType,
               hasPhoto: checklist?.hasPhoto ?? true,
@@ -305,9 +309,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           const subtaskId = String(snapshot.subtaskId || '');
           const template = subtaskTemplates.get(subtaskId);
           if (!id || configuredDeviceIds.has(id) || !template) return [];
-          const savedFormData = snapshot.formData && typeof snapshot.formData === 'object'
-            ? snapshot.formData as Partial<DeviceItem['formData']>
-            : {};
+          const savedFormData = getSavedFormData(snapshot.formData);
           return [{
             ...template,
             id,
@@ -508,8 +510,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         duration: `${device.formData.durasi || '30'} Menit`,
         file: device.formData.photoName || 'foto_inspeksi.jpg',
         time: device.formData.capturedAt || '',
-        latitude: device.formData.latitude,
-        longitude: device.formData.longitude,
         conditionValue: device.formData.conditionValue,
         conditionSelection: device.formData.conditionSelection,
         logicOutput: device.formData.logicOutput,
@@ -795,19 +795,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   };
 
   const captureResponseMetadata = async (device: DeviceItem) => {
-    const capturedAt = new Date().toISOString();
-    if (!device.hasTimestamp || !navigator.geolocation) return { capturedAt: device.hasTimestamp ? capturedAt : '' };
-    return new Promise<{ capturedAt: string; latitude?: number; longitude?: number }>((resolve) => {
-      navigator.geolocation.getCurrentPosition(
-        (position) => resolve({
-          capturedAt,
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        }),
-        () => resolve({ capturedAt }),
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-      );
-    });
+    return { capturedAt: device.hasTimestamp ? new Date().toISOString() : '' };
   };
 
   // Update specific device property helper
@@ -1347,7 +1335,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                               <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${isSelected ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-700'}`}>
                                 {index + 1}
                               </span>
-                              <span>{device.taskTitle}</span>
+                              <span>{device.subtaskTitle}</span>
                               <span className={`h-2 w-2 rounded-full ${points.length > 0 && points.every((point) => point.statusState === 'DONE') ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                             </button>
                           );
@@ -1364,7 +1352,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                       <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50">
                         <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                         <p className="text-sm font-semibold text-slate-600">
-                          Belum ada titik perangkat pada {activeSubtask?.taskTitle || activeJob.title}
+                          Belum ada Something To Do pada {activeSubtask?.subtaskTitle || activeJob.title}
                         </p>
                         <p className="text-xs text-slate-400 mt-1">
                           Tambahkan titik perangkat pada sub-tugas aktif ini.
@@ -1400,7 +1388,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                               </div>
                               {device.hasTimestamp && (
                                 <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">
-                                  <Clock className="h-3 w-3" /> Waktu & GPS otomatis
+                                  <Clock className="h-3 w-3" /> Tanggal &amp; Waktu otomatis
                                 </span>
                               )}
                             </div>
@@ -1657,11 +1645,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                   </div>}
 
                                   {device.hasTimestamp && device.formData.capturedAt && (
-                                    <div className="flex flex-col gap-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                                      <span className="font-semibold">Waktu: {new Date(device.formData.capturedAt).toLocaleString('id-ID')}</span>
-                                      {device.formData.latitude !== undefined && device.formData.longitude !== undefined
-                                        ? <span>GPS: {device.formData.latitude.toFixed(6)}, {device.formData.longitude.toFixed(6)}</span>
-                                        : <span>Lokasi GPS tidak tersedia; waktu tetap tercatat.</span>}
+                                    <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                      <span className="font-semibold">Tanggal &amp; Waktu: {new Date(device.formData.capturedAt).toLocaleString('id-ID')}</span>
                                     </div>
                                   )}
 

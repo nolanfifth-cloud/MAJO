@@ -32,8 +32,6 @@ export interface CompletedPmReportExport {
     time: string;
     desc: string;
     status?: string;
-    latitude?: number;
-    longitude?: number;
   }>;
 }
 
@@ -122,7 +120,6 @@ export async function downloadCompletedPmReport(report: CompletedPmReportExport)
     { header: 'Durasi', key: 'duration', width: 16 },
     { header: 'Foto Bukti', key: 'photo', width: 28 },
     { header: 'Waktu Verifikasi', key: 'time', width: 28 },
-    { header: 'GPS', key: 'gps', width: 28 },
     { header: 'Keterangan', key: 'notes', width: 54 },
   ];
   const header = details.getRow(1);
@@ -136,9 +133,6 @@ export async function downloadCompletedPmReport(report: CompletedPmReportExport)
     duration: item.duration,
     photo: item.file,
     time: item.time,
-    gps: item.latitude !== undefined && item.longitude !== undefined
-      ? `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
-      : '',
     notes: item.desc,
   }));
   styleBodyRows(rows);
@@ -236,7 +230,6 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     { header: 'Durasi', key: 'duration', width: 16 },
     { header: 'Foto Bukti', key: 'photo', width: 28 },
     { header: 'Waktu Verifikasi', key: 'time', width: 28 },
-    { header: 'GPS', key: 'gps', width: 28 },
     { header: 'Keterangan', key: 'notes', width: 54 },
   ];
   styleTableHeader(details.getRow(1));
@@ -249,13 +242,10 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     duration: item.duration,
     photo: item.file,
     time: item.time,
-    gps: item.latitude !== undefined && item.longitude !== undefined
-      ? `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
-      : '',
     notes: item.desc,
   })));
   styleBodyRows(detailRows);
-  details.autoFilter = { from: 'A1', to: 'J1' };
+  details.autoFilter = { from: 'A1', to: 'I1' };
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

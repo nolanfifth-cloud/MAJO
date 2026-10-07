@@ -181,14 +181,21 @@ service cloud.firestore {
         || (isPortalUser(resource.data.portalId)
           && resource.data.targetWilayahList is list
           && profile().location in resource.data.targetWilayahList);
-      allow list: if isPortalAdmin(resource.data.portalId);
+      allow list: if isPortalAdmin(resource.data.portalId)
+        || (isPortalUser(resource.data.portalId)
+          && resource.data.targetWilayahList is list
+          && resource.data.targetWilayahList.hasAny([profile().location]));
       allow create: if isPortalAdmin(request.resource.data.portalId)
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.targetUserUids is list;
       allow update: if isPortalAdmin(resource.data.portalId)
-        && resource.data.createdBy == request.auth.uid
         && request.resource.data.portalId == resource.data.portalId
-        && request.resource.data.createdBy == request.auth.uid;
+        && (
+          ('createdBy' in resource.data
+            && request.resource.data.createdBy == resource.data.createdBy)
+          || (!('createdBy' in resource.data)
+            && !('createdBy' in request.resource.data))
+        );
       allow delete: if isPortalAdmin(resource.data.portalId);
     }
 
@@ -232,4 +239,3 @@ service cloud.firestore {
     }
   }
 }
-

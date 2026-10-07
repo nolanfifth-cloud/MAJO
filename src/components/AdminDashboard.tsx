@@ -52,10 +52,10 @@ const createEditablePmModule = (name = '', checklist: EditableChecklistItem[] = 
   name,
   checklist,
   newItemText: '',
-  hasPhoto: true,
-  hasCondition: true,
+  hasPhoto: false,
+  hasCondition: false,
   conditionOptionsInput: '',
-  hasTimestamp: true,
+  hasTimestamp: false,
   hasNotes: false,
 });
 
@@ -1977,7 +1977,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </span>
                 </div>
                 <span className="text-body-sm text-secondary font-medium">
-                  Real-time Sinyal GPS & Sinkronisasi Foto
+                  Respons Petugas & Sinkronisasi Foto
                 </span>
               </div>
 
@@ -2028,7 +2028,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
                                   {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-0.5">Foto</span>}
                                   {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-0.5">{item.conditionText || 'Kondisi'}</span>}
-                                  {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Waktu &amp; GPS</span>}
+                                  {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Tanggal &amp; Waktu</span>}
                                   {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-0.5">Keterangan</span>}
                                 </div>
                               </div>
@@ -2054,9 +2054,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       {formData.durasi && <p className="mt-1">Durasi: {String(formData.durasi)} menit</p>}
                                       {formData.photoName && <p className="mt-1">Foto: {String(formData.photoName)}</p>}
                                       {formData.capturedAt && <p className="mt-1">Waktu: {new Date(String(formData.capturedAt)).toLocaleString('id-ID')}</p>}
-                                      {typeof formData.latitude === 'number' && typeof formData.longitude === 'number' && (
-                                        <p className="mt-1">GPS: {formData.latitude.toFixed(6)}, {formData.longitude.toFixed(6)}</p>
-                                      )}
                                     </div>
                                   );
                                 })}
@@ -2210,7 +2207,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     <div className="mt-2 flex flex-wrap gap-1.5">
                                       {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Foto wajib</span>}
                                       {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-1 text-[10px] font-medium text-on-secondary-fixed">Kondisi: {conditionSummary}</span>}
-                                      {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Tanggal, waktu &amp; GPS</span>}
+                                      {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Tanggal &amp; Waktu</span>}
                                       {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-1 text-[10px] font-medium text-on-tertiary-fixed">Keterangan petugas</span>}
                                     </div>
                                   </div>
@@ -2435,7 +2432,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </label>
                                   <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
                                     <input type="checkbox" checked={item.hasTimestamp} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasTimestamp: event.target.checked })} />
-                                    Tanggal, waktu &amp; GPS
+                                    Tanggal &amp; Waktu
                                   </label>
                                   <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
                                     <input type="checkbox" checked={item.hasNotes ?? false} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasNotes: event.target.checked })} />
@@ -2496,7 +2493,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <input type="checkbox" checked={module.hasCondition} onChange={(event) => handleUpdateEditModule(module.id, { hasCondition: event.target.checked })} /> Pilihan kondisi
                             </label>
                             <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
-                              <input type="checkbox" checked={module.hasTimestamp} onChange={(event) => handleUpdateEditModule(module.id, { hasTimestamp: event.target.checked })} /> Tanggal, waktu &amp; GPS
+                              <input type="checkbox" checked={module.hasTimestamp} onChange={(event) => handleUpdateEditModule(module.id, { hasTimestamp: event.target.checked })} /> Tanggal &amp; Waktu
                             </label>
                             <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
                               <input type="checkbox" checked={module.hasNotes} onChange={(event) => handleUpdateEditModule(module.id, { hasNotes: event.target.checked })} /> Keterangan petugas

@@ -46,6 +46,7 @@ export interface PmModule {
 }
 
 export interface PmItem {
+  createdAt?: string;
   id: string;
   code: string;
   title: string;

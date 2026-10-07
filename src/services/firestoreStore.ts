@@ -68,26 +68,16 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
   const location = String(profile?.location || '');
   if (!profileSnapshot.exists() || profile?.role !== 'user' || !portalId || !location) return [];
 
-  const [locationAssignments, legacyAssignments] = await Promise.all([
-    getDocs(collection(database, 'portalJobCatalog', portalId, 'locations', location, 'jobs')),
-    getDocs(collection(database, 'users', authenticatedUid, 'jobAssignments')),
-  ]);
-  const jobIds = new Set([
-    ...locationAssignments.docs.map((assignment) => String(assignment.data().jobId || assignment.id)),
-    ...legacyAssignments.docs.map((assignment) => String(assignment.data().jobId || assignment.id)),
-  ]);
-  const jobs = await Promise.all([...jobIds].map(async (jobId) => {
-    try {
-      const jobSnapshot = await getDoc(doc(database, 'jobs', jobId));
-      if (!jobSnapshot.exists()) return null;
-      const job = jobSnapshot.data() as PmItem;
-      if (normalizePortalAddress(job.portalId || '') !== portalId || !job.targetWilayahList?.includes(location)) return null;
-      return { ...job, id: jobSnapshot.id };
-    } catch {
-      return null;
-    }
+  const snapshot = await getDocs(query(
+    collection(database, 'jobs'),
+    where('portalId', '==', portalId),
+    where('targetWilayahList', 'array-contains', location)
+  ));
+  return snapshot.docs.map((item) => ({
+    ...(item.data() as PmItem),
+    id: item.id,
+    portalId,
   }));
-  return jobs.filter((job): job is PmItem => job !== null);
 }
 
 export async function saveJobProgressToFirestore(
@@ -202,26 +192,26 @@ export async function saveAdminJobToFirestore(job: PmItem, adminUid: string, por
   const targetUserUids = assignedAccounts
     .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
     .map((account) => account.uid as string);
-  await setDoc(doc(database, 'jobs', job.id), {
+  const jobRef = doc(database, 'jobs', job.id);
+  const existingJobSnapshot = await getDoc(jobRef);
+  const existingJob = existingJobSnapshot.exists() ? existingJobSnapshot.data() : null;
+  if (existingJob && normalizePortalAddress(String(existingJob.portalId || '')) !== normalizedPortalId) {
+    throw new Error('Pekerjaan ini bukan bagian dari portal admin yang sedang aktif.');
+  }
+  const creatorMetadata = existingJobSnapshot.exists()
+    ? existingJob && Object.prototype.hasOwnProperty.call(existingJob, 'createdBy')
+      ? { createdBy: existingJob.createdBy }
+      : {}
+    : { createdBy: job.createdBy || adminUid };
+  await setDoc(jobRef, {
     ...job,
     portalId: normalizedPortalId,
     targetUserUids,
-    createdAt: new Date().toISOString(),
-    createdBy: adminUid,
+    createdAt: typeof existingJob?.createdAt === 'string'
+      ? existingJob.createdAt
+      : job.createdAt || new Date().toISOString(),
+    ...creatorMetadata,
   });
-  await Promise.all(assignedAccounts
-    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
-    .map((account) => setDoc(doc(database, 'users', account.uid!, 'jobAssignments', job.id), {
-      jobId: job.id,
-      userUid: account.uid,
-      portalId: normalizedPortalId,
-      location: account.location,
-      createdBy: adminUid,
-    })));
-  await Promise.all([...targetLocations].map((location) => setDoc(
-    doc(database, 'portalJobCatalog', normalizedPortalId, 'locations', location, 'jobs', job.id),
-    { jobId: job.id, portalId: normalizedPortalId, location, createdBy: adminUid }
-  )));
   return normalizedPortalId;
 }
 
@@ -237,19 +227,6 @@ export async function assignExistingAdminJobToUsers(
     .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
     .map((account) => account.uid as string);
   await updateDoc(doc(database, 'jobs', job.id), { targetUserUids });
-  await Promise.all(accounts
-    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
-    .map((account) => setDoc(doc(database, 'users', account.uid!, 'jobAssignments', job.id), {
-      jobId: job.id,
-      userUid: account.uid,
-      portalId: job.portalId,
-      location: account.location,
-      createdBy: adminUid,
-    })));
-  await Promise.all([...targetLocations].map((location) => setDoc(
-    doc(database, 'portalJobCatalog', normalizePortalAddress(job.portalId || ''), 'locations', location, 'jobs', job.id),
-    { jobId: job.id, portalId: normalizePortalAddress(job.portalId || ''), location, createdBy: adminUid }
-  )));
 }
 
 export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string): Promise<void> {

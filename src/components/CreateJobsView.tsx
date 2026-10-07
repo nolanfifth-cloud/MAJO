@@ -103,10 +103,10 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const [newConditionOption, setNewConditionOption] = useState('');
   const [logicRanges, setLogicRanges] = useState<ConditionLogicRange[]>([]);
   const [newLogicRange, setNewLogicRange] = useState({ min: '', max: '', output: '' });
-  const [togglePhoto, setTogglePhoto] = useState(true);
-  const [toggleCondition, setToggleCondition] = useState(true);
+  const [togglePhoto, setTogglePhoto] = useState(false);
+  const [toggleCondition, setToggleCondition] = useState(false);
   const [toggleLogicCondition, setToggleLogicCondition] = useState(false);
-  const [toggleTimestamp, setToggleTimestamp] = useState(true);
+  const [toggleTimestamp, setToggleTimestamp] = useState(false);
   const [toggleNotes, setToggleNotes] = useState(false);
   const allChecklistItems = subtasks.flatMap((subtask) => subtask.items);
   const activeSubtask = subtasks.find((subtask) => subtask.id === activeSubtaskId) || subtasks[0];
@@ -329,8 +329,11 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     setNewConditionOption('');
     setLogicRanges([]);
     setNewLogicRange({ min: '', max: '', output: '' });
+    setTogglePhoto(false);
     setToggleCondition(false);
     setToggleLogicCondition(false);
+    setToggleTimestamp(false);
+    setToggleNotes(false);
     showToast('Sub-Tugas dibuat. Tambahkan Something To Do ke dalamnya.');
   };
 
@@ -399,10 +402,10 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     setNewConditionOption('');
     setLogicRanges([]);
     setNewLogicRange({ min: '', max: '', output: '' });
-    setTogglePhoto(true);
-    setToggleCondition(true);
+    setTogglePhoto(false);
+    setToggleCondition(false);
     setToggleLogicCondition(false);
-    setToggleTimestamp(true);
+    setToggleTimestamp(false);
     setToggleNotes(false);
   };
 
@@ -1320,7 +1323,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                               <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
                                 {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-0.5">Foto</span>}
                                 {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-0.5">{item.conditionText || 'Kondisi'}</span>}
-                                {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Tanggal &amp; GPS</span>}
+                                {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Tanggal &amp; Waktu</span>}
                                 {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-0.5">Keterangan</span>}
                               </div>
                             </div>
@@ -1435,7 +1438,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   </label>
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
                     <input checked={toggleTimestamp} onChange={(event) => setToggleTimestamp(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
-                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">schedule</span>Tanggal, waktu &amp; GPS</span>
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">schedule</span>Tanggal &amp; Waktu</span>
                   </label>
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface sm:col-span-2">
                     <input checked={toggleNotes} onChange={(event) => setToggleNotes(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
