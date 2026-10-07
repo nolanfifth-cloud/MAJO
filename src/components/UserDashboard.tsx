@@ -216,20 +216,28 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   const [jobsDatabase, setJobsDatabase] = useState<Record<number, JobTabItem>>({});
   const [isJobsLoading, setIsJobsLoading] = useState(true);
   const [submittedJobIds, setSubmittedJobIds] = useState<Set<string>>(new Set());
+  const isJobProgressReadyRef = useRef(false);
+  const progressSaveErrorRef = useRef<string | null>(null);
   const hasAssignedJobs = Object.keys(jobsDatabase).length > 0;
 
   useEffect(() => {
     let cancelled = false;
+    isJobProgressReadyRef.current = false;
     setIsJobsLoading(true);
     const userUid = currentUser.uid || '';
-    Promise.all([
+    Promise.allSettled([
       loadJobsForUserFromFirestore(),
       userUid ? loadJobProgressForUserFromFirestore(userUid) : Promise.resolve([]),
       userUid && currentUser.portalAddress
         ? loadCompletedReportsFromFirestore(userUid, currentUser.portalAddress)
         : Promise.resolve([]),
-    ]).then(([jobs, progressSnapshots, completedReports]) => {
+    ]).then(([jobsResult, progressResult, reportsResult]) => {
+      if (jobsResult.status === 'rejected') throw jobsResult.reason;
       if (cancelled) return;
+      const jobs = jobsResult.value;
+      const progressSnapshots = progressResult.status === 'fulfilled' ? progressResult.value : [];
+      const completedReports = reportsResult.status === 'fulfilled' ? reportsResult.value : [];
+      isJobProgressReadyRef.current = progressResult.status === 'fulfilled';
       const submittedIds = new Set(completedReports.map((report) => String(report.jobId || '')).filter(Boolean));
       try {
         const localReports = JSON.parse(localStorage.getItem('majo_completed_reports') || '[]') as Record<string, unknown>[];
@@ -341,6 +349,20 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       setCurrentJobId(assignedJobs[1] ? 1 : 0);
       setActiveSubtaskId(assignedJobs[1]?.devices[0]?.subtaskId || '');
       setCurrentJobsPage(1);
+      const ancillaryLoadErrors = [
+        progressResult.status === 'rejected'
+          ? `progres: ${progressResult.reason instanceof Error ? progressResult.reason.message : 'gagal dimuat'}`
+          : '',
+        reportsResult.status === 'rejected'
+          ? `riwayat penyelesaian: ${reportsResult.reason instanceof Error ? reportsResult.reason.message : 'gagal dimuat'}`
+          : '',
+      ].filter(Boolean);
+      if (ancillaryLoadErrors.length > 0) {
+        triggerToast(
+          `PM berhasil dimuat, tetapi ${ancillaryLoadErrors.join('; ')}. Periksa koneksi, indeks, dan aturan Firebase.`,
+          false
+        );
+      }
     }).catch((error) => {
       const message = error instanceof Error ? error.message : 'Periksa koneksi dan aturan akses Firebase.';
       triggerToast(`Gagal memuat penugasan dari Firebase: ${message}`, false);
@@ -355,7 +377,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   useEffect(() => {
     const activeJob = jobsDatabase[currentJobId];
-    if (!activeJob?.sourceId || !currentUser.uid) return;
+    if (!activeJob?.sourceId || !currentUser.uid || !isJobProgressReadyRef.current) return;
     void saveJobProgressToFirestore(
       activeJob.sourceId,
       currentUser.uid,
@@ -370,10 +392,16 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         totalCount: activeJob.devices.length,
       },
       currentUser.name || currentUser.username
-    ).catch(() => {
-      // Local state remains available when the cloud is unreachable.
+    ).then(() => {
+      progressSaveErrorRef.current = null;
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Penyimpanan progres Firebase gagal.';
+      if (progressSaveErrorRef.current !== message) {
+        progressSaveErrorRef.current = message;
+        triggerToast(`Progres belum tersimpan ke Firebase: ${message}`, false);
+      }
     });
-  }, [jobsDatabase, currentJobId, currentUser.uid, currentUser.location]);
+  }, [jobsDatabase, currentJobId, currentUser.uid, currentUser.location, currentUser.portalAddress, currentUser.name, currentUser.username]);
 
   // Submission & Confirmation modal states
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
