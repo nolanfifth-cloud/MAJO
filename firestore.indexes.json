@@ -9,6 +9,14 @@
       ]
     },
     {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "portalId", "order": "ASCENDING" },
+        { "fieldPath": "targetUserUids", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
       "collectionGroup": "completedReports",
       "queryScope": "COLLECTION",
       "fields": [
