@@ -521,7 +521,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setEditTitle(pm.title);
       setEditStart(pm.startDate);
       setEditEnd(pm.endDate);
-      setEditRegions(pm.regions);
+      setEditRegions(pm.targetWilayahList?.join(', ') || pm.regions);
       setEditPic(pm.pic);
       const existingModules = pm.modules || [];
       setEditModules(existingModules.map((module, index) => {
