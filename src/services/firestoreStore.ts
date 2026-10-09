@@ -72,18 +72,19 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
   try {
     snapshot = await getDocs(query(
       collection(database, 'jobs'),
-      where('portalId', '==', portalId),
       where('targetUserUids', 'array-contains', authenticatedUid)
     ));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Kesalahan Firestore tidak diketahui.';
     throw new Error(`Gagal membaca PM untuk akun dan portal ini: ${message}`);
   }
-  return snapshot.docs.map((item) => ({
-    ...(item.data() as PmItem),
-    id: item.id,
-    portalId,
-  }));
+  return snapshot.docs
+    .map((item) => ({ ...(item.data() as PmItem), id: item.id }))
+    .filter((job) =>
+      normalizePortalAddress(job.portalId || '') === portalId
+      && job.targetWilayahList?.includes(location)
+    )
+    .map((job) => ({ ...job, portalId }));
 }
 
 export async function saveJobProgressToFirestore(
