@@ -182,9 +182,9 @@ service cloud.firestore {
           && resource.data.targetWilayahList is list
           && profile().location in resource.data.targetWilayahList);
       allow list: if isPortalAdmin(resource.data.portalId)
-        || (signedIn()
-          && resource.data.targetUserUids is list
-          && request.auth.uid in resource.data.targetUserUids);
+        || (isPortalUser(resource.data.portalId)
+          && resource.data.targetWilayahList is list
+          && profile().location in resource.data.targetWilayahList);
       allow create: if isPortalAdmin(request.resource.data.portalId)
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.targetUserUids is list;
