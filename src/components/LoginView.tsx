@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AuthView, RegisteredAccount } from '../types';
-import { isFirebaseConfigured, loginWithFirebase } from '../services/firebase';
+import { firebaseConfigurationError, isFirebaseConfigured, loginWithFirebase } from '../services/firebase';
 
 const LOGO_URL = '/assets/majo-logo.png';
 
@@ -45,7 +45,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
     if (!isFirebaseConfigured) {
-      setErrorMessage('Firebase belum dikonfigurasi. Login lokal dinonaktifkan demi keamanan.');
+      setErrorMessage(firebaseConfigurationError || 'Firebase belum dikonfigurasi. Login lokal dinonaktifkan demi keamanan.');
       return;
     }
 

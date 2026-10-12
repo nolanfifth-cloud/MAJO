@@ -215,6 +215,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   // Jobs are loaded from real admin assignments; no demo records are seeded.
   const [jobsDatabase, setJobsDatabase] = useState<Record<number, JobTabItem>>({});
   const [isJobsLoading, setIsJobsLoading] = useState(true);
+  const [jobsLoadError, setJobsLoadError] = useState('');
+  const [jobsReloadKey, setJobsReloadKey] = useState(0);
   const [submittedJobIds, setSubmittedJobIds] = useState<Set<string>>(new Set());
   const isJobProgressReadyRef = useRef(false);
   const progressSaveErrorRef = useRef<string | null>(null);
@@ -223,6 +225,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   useEffect(() => {
     let cancelled = false;
     isJobProgressReadyRef.current = false;
+    setJobsLoadError('');
     setIsJobsLoading(true);
     const userUid = currentUser.uid || '';
     Promise.allSettled([
@@ -366,14 +369,17 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     }).catch((error) => {
       const message = error instanceof Error ? error.message : 'Periksa koneksi dan aturan akses Firebase.';
       triggerToast(`Gagal memuat penugasan dari Firebase: ${message}`, false);
-      if (!cancelled) setJobsDatabase({});
+      if (!cancelled) {
+        setJobsDatabase({});
+        setJobsLoadError(message);
+      }
     }).finally(() => {
       if (!cancelled) setIsJobsLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [currentUser.uid, currentUser.location, currentUser.portalAddress]);
+  }, [currentUser.uid, currentUser.location, currentUser.portalAddress, jobsReloadKey]);
 
   useEffect(() => {
     const activeJob = jobsDatabase[currentJobId];
@@ -886,7 +892,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="text-slate-800 antialiased min-h-screen flex flex-col bg-[#faf9fb] font-sans">
       {/* Toast Notification */}
       {toast.show && (
-        <div ref={toastRef} className="fixed bottom-6 right-6 z-50 max-w-md bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-3 text-xs animate-in slide-in-from-bottom-4">
+        <div ref={toastRef} className="fixed bottom-20 left-4 right-4 sm:bottom-6 sm:left-auto sm:right-6 z-50 max-w-md bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-3 text-xs animate-in slide-in-from-bottom-4">
           <div
             className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
               toast.isSuccess ? 'text-emerald-400' : 'text-rose-400'
@@ -901,8 +907,8 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       {/* ===================================================================== */}
       {/* TOP NAVBAR */}
       {/* ===================================================================== */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 px-6 py-3.5 flex items-center justify-between shadow-2xs">
-        <div className="flex items-center space-x-4">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 px-3 sm:px-6 py-3.5 flex items-center justify-between gap-2 shadow-2xs">
+        <div className="flex items-center space-x-2 sm:space-x-4 min-w-0">
           {/* MAJO Logo */}
           <div className="flex items-center space-x-2.5">
             <div className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center shadow-xs bg-white border border-slate-200 p-0.5 shrink-0">
@@ -933,9 +939,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         </div>
 
         {/* Right Profile / Status */}
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2 sm:space-x-4 shrink-0">
           {activeMenu === 'profil' ? (
-            <div className="flex items-center space-x-2 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium rounded-full">
+            <div className="hidden sm:flex items-center space-x-2 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-medium rounded-full">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               <span>Online • Akun Terverifikasi</span>
             </div>
@@ -945,7 +951,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               <span>Online • Riwayat Tersinkron</span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               <span>Akun Firebase terverifikasi</span>
             </div>
@@ -1027,7 +1033,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
             <button
               type="button"
               onClick={() => setShowProfileDropdown(!showProfileDropdown)}
-              className="flex items-center space-x-3 pl-2 border-l border-slate-200 text-left cursor-pointer hover:opacity-90 transition-opacity"
+              className="flex items-center space-x-2 sm:space-x-3 pl-2 border-l border-slate-200 text-left cursor-pointer hover:opacity-90 transition-opacity"
             >
               <div className="w-9 h-9 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-xs shadow-xs border border-slate-700">
                 {userInitials}
@@ -1179,7 +1185,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         {/* ===================================================================== */}
         {/* CONTENT WORKSPACE */}
         {/* ===================================================================== */}
-        <main className="flex-1 overflow-y-auto p-5 md:p-8 space-y-6">
+        <main className="min-w-0 flex-1 overflow-y-auto p-4 pb-24 md:px-8 md:py-8 md:pb-24 lg:pb-8 space-y-6">
           {/* VIEW A: DASHBOARD JOBS (Default View matching Image) */}
           {activeMenu === 'dashboard' && (
             <>
@@ -1194,6 +1200,19 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
                 {isJobsLoading ? (
                   <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Memuat penugasan admin...</div>
+                ) : jobsLoadError ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900" role="alert">
+                    <p className="font-bold">Penugasan PM gagal dimuat</p>
+                    <p className="mt-2 break-words text-xs leading-relaxed">{jobsLoadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => setJobsReloadKey((key) => key + 1)}
+                      className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-xl bg-rose-700 px-4 py-2 text-xs font-bold text-white hover:bg-rose-800"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      Coba lagi
+                    </button>
+                  </div>
                 ) : hasAssignedJobs ? (
                   <div className="space-y-3">
                     {visibleJobs.map((job) => {
@@ -1889,6 +1908,30 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           )}
         </main>
       </div>
+
+      <nav
+        aria-label="Navigasi utama"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t border-slate-200 bg-white/95 px-2 pt-2 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden"
+      >
+        {([
+          ['dashboard', ListChecks, 'Penugasan'],
+          ['riwayat', Clock, 'Riwayat'],
+          ['profil', User, 'Profil'],
+        ] as const).map(([menu, Icon, label]) => (
+          <button
+            key={menu}
+            type="button"
+            aria-current={activeMenu === menu ? 'page' : undefined}
+            onClick={() => setActiveMenu(menu)}
+            className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-semibold ${
+              activeMenu === menu ? 'text-slate-950' : 'text-slate-500'
+            }`}
+          >
+            <Icon className="h-5 w-5" />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
 
       {/* ===================================================================== */}
       {/* MODAL 1: KONFIRMASI HAPUS PERANGKAT */}

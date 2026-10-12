@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Menu, X } from 'lucide-react';
 import { ChecklistItem, PmItem, AuthView } from '../types';
 import { CreateJobsView } from './CreateJobsView';
 import { LinkPortalView } from './LinkPortalView';
@@ -321,6 +322,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Active navigation tab in sidebar
   const [activeNav, setActiveNav] = useState<'dashboard' | 'create-jobs' | 'link-portal' | 'pengaturan-profile'>('dashboard');
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const navigateAdminSection = (section: typeof activeNav) => {
+    setActiveNav(section);
+    setIsMobileNavOpen(false);
+  };
 
   // Modals state
   const [isMonitoringOpen, setIsMonitoringOpen] = useState(false);
@@ -805,7 +811,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ========================================================================= */}
       {/* SIDEBAR NAVIGATION */}
       {/* ========================================================================= */}
-      <aside className="fixed left-0 top-0 h-full w-72 bg-surface-container-lowest z-50 flex flex-col justify-between shadow-[0_1px_8px_rgba(0,0,0,0.04)] border-r border-outline-variant/20">
+      {isMobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Tutup menu navigasi"
+          onClick={() => setIsMobileNavOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/40 lg:hidden"
+        />
+      )}
+      <aside className={`fixed left-0 top-0 h-full w-[min(18rem,85vw)] bg-surface-container-lowest z-50 flex flex-col justify-between shadow-[0_1px_8px_rgba(0,0,0,0.04)] border-r border-outline-variant/20 transition-transform duration-200 lg:w-72 lg:translate-x-0 ${
+        isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
         <div className="flex flex-col">
           {/* Logo Header */}
           <div className="h-16 px-6 flex items-center justify-between border-b border-outline-variant/10">
@@ -832,7 +848,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <nav className="flex flex-col gap-1">
               <button
                 type="button"
-                onClick={() => setActiveNav('dashboard')}
+                onClick={() => navigateAdminSection('dashboard')}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT transition-colors font-label-md text-left cursor-pointer ${
                   activeNav === 'dashboard'
                     ? 'bg-primary-container text-on-primary-container shadow-xs font-semibold'
@@ -845,7 +861,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveNav('create-jobs')}
+                onClick={() => navigateAdminSection('create-jobs')}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT transition-colors font-label-md text-left cursor-pointer ${
                   activeNav === 'create-jobs'
                     ? 'bg-primary-container text-on-primary-container shadow-xs font-semibold'
@@ -858,7 +874,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveNav('link-portal')}
+                onClick={() => navigateAdminSection('link-portal')}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT transition-colors font-label-md text-left cursor-pointer ${
                   activeNav === 'link-portal'
                     ? 'bg-primary-container text-on-primary-container shadow-xs font-semibold'
@@ -871,7 +887,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <button
                 type="button"
-                onClick={() => setActiveNav('pengaturan-profile')}
+                onClick={() => navigateAdminSection('pengaturan-profile')}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT transition-colors font-label-md text-left cursor-pointer ${
                   activeNav === 'pengaturan-profile'
                     ? 'bg-primary-container text-on-primary-container shadow-xs font-semibold'
@@ -906,16 +922,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ========================================================================= */}
       {/* MAIN CONTENT WRAPPER */}
       {/* ========================================================================= */}
-      <div className="pl-72 flex flex-col min-h-screen w-full">
+      <div className="w-full min-w-0 flex flex-col min-h-screen pl-0 lg:pl-72">
         {/* Top Header */}
-        <header className="fixed top-0 left-72 right-0 h-16 bg-surface-container-lowest/90 backdrop-blur-xl z-40 shadow-[0_1px_8px_rgba(0,0,0,0.04)] px-8 flex items-center justify-between border-b border-outline-variant/20">
+        <header className="fixed top-0 left-0 lg:left-72 right-0 h-16 bg-surface-container-lowest/90 backdrop-blur-xl z-40 shadow-[0_1px_8px_rgba(0,0,0,0.04)] px-4 sm:px-8 flex items-center justify-between border-b border-outline-variant/20">
           {/* Empty Space (Search removed per user request without shifting layout) */}
-          <div className="flex-1 max-w-md" />
+          <div className="flex items-center flex-1 max-w-md">
+            <button
+              type="button"
+              aria-label="Buka menu navigasi"
+              aria-expanded={isMobileNavOpen}
+              onClick={() => setIsMobileNavOpen((open) => !open)}
+              className="mr-3 inline-flex h-10 w-10 items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container lg:hidden"
+            >
+              {isMobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
+          </div>
 
           {/* Top Right Badges & Controls */}
-          <div className="flex items-center gap-4 relative">
+          <div className="flex items-center gap-2 sm:gap-4 relative">
             {/* Encrypted Node status */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low border border-outline-variant/20">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low border border-outline-variant/20">
               <span className="inline-block w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
               <span className="font-label-sm text-label-sm text-on-surface-variant font-medium">
                 Portal Operasional
@@ -1003,7 +1029,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setShowProfileMenu(!showProfileMenu)}
                 className="flex items-center gap-3 pl-2 border-l border-outline-variant/30 hover:opacity-80 transition-opacity cursor-pointer text-left"
               >
-                <div className="flex flex-col text-right">
+                <div className="hidden sm:flex flex-col text-right">
                   <span className="font-label-md text-label-md text-on-surface leading-tight font-semibold">
                     {currentUser.name || 'Belum login'}
                   </span>
@@ -1102,7 +1128,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }}
             />
           ) : (
-            <div className="p-8 lg:p-10 flex flex-col gap-8">
+            <div className="min-w-0 p-4 sm:p-6 lg:p-10 flex flex-col gap-6 sm:gap-8">
               {/* Dashboard Top Header */}
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div className="flex flex-col gap-1">

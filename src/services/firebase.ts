@@ -30,19 +30,57 @@ import { RegisteredAccount } from '../types';
 import { normalizePortalAddress } from './workflowStore';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || '').trim(),
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '').trim(),
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || '').trim(),
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '').trim(),
+  messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '').trim(),
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID || '').trim(),
 };
 
-export const isFirebaseConfigured = Object.values(firebaseConfig).every(Boolean);
+const firebaseEnvironmentNames: Record<keyof typeof firebaseConfig, string> = {
+  apiKey: 'VITE_FIREBASE_API_KEY',
+  authDomain: 'VITE_FIREBASE_AUTH_DOMAIN',
+  projectId: 'VITE_FIREBASE_PROJECT_ID',
+  storageBucket: 'VITE_FIREBASE_STORAGE_BUCKET',
+  messagingSenderId: 'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  appId: 'VITE_FIREBASE_APP_ID',
+};
+const missingFirebaseEnvironment = ([
+  ['apiKey', firebaseConfig.apiKey],
+  ['authDomain', firebaseConfig.authDomain],
+  ['projectId', firebaseConfig.projectId],
+  ['storageBucket', firebaseConfig.storageBucket],
+  ['messagingSenderId', firebaseConfig.messagingSenderId],
+  ['appId', firebaseConfig.appId],
+] as const)
+  .filter(([, value]) => !value)
+  .map(([key]) => firebaseEnvironmentNames[key]);
+const existingDefaultApp = getApps().find((firebaseApp) => firebaseApp.name === '[DEFAULT]');
+const mismatchedFirebaseAppFields = existingDefaultApp
+  ? ([
+      ['apiKey', 'apiKey'],
+      ['authDomain', 'authDomain'],
+      ['projectId', 'projectId'],
+      ['storageBucket', 'storageBucket'],
+      ['messagingSenderId', 'messagingSenderId'],
+      ['appId', 'appId'],
+    ] as const)
+      .filter(([configKey, appKey]) =>
+        existingDefaultApp.options[appKey] !== firebaseConfig[configKey]
+      )
+      .map(([configKey]) => firebaseEnvironmentNames[configKey])
+  : [];
+
+export const firebaseProjectId = firebaseConfig.projectId || 'tidak terdeteksi';
+export const firebaseConfigurationError = missingFirebaseEnvironment.length > 0
+  ? `Variabel Firebase belum diisi: ${missingFirebaseEnvironment.join(', ')}.`
+  : mismatchedFirebaseAppFields.length > 0
+    ? `Konfigurasi Firebase pada bundle tidak cocok dengan Firebase SDK aktif (${mismatchedFirebaseAppFields.join(', ')}). Muat ulang deployment setelah memperbaiki Environment Variables.`
+    : '';
+export const isFirebaseConfigured = !firebaseConfigurationError;
 const app = isFirebaseConfigured
-  ? getApps().length > 0
-    ? getApps()[0]
-    : initializeApp(firebaseConfig)
+  ? existingDefaultApp || initializeApp(firebaseConfig)
   : null;
 
 export const firebaseAuth = app ? getAuth(app) : null;
@@ -321,4 +359,3 @@ export async function getRegisteredAccountForFirebaseUser(user: User): Promise<R
     createdAt: (profile.createdAt as string) || new Date().toISOString(),
   };
 }
-

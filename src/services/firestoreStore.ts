@@ -11,7 +11,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { PmItem, RegisteredAccount, RegionConfig } from '../types';
-import { firebaseAuth, firestore, isFirebaseConfigured } from './firebase';
+import { firebaseAuth, firebaseProjectId, firestore, isFirebaseConfigured } from './firebase';
 import { PortalMasterConfig, getActivePortalAddress, normalizePortalAddress } from './workflowStore';
 
 const portalDocId = (portalAddress?: string): string => {
@@ -62,11 +62,31 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
   if (!isFirebaseConfigured || !database) return [];
   const authenticatedUid = firebaseAuth?.currentUser?.uid;
   if (!authenticatedUid) throw new Error('Sesi Firebase tidak aktif. Silakan login ulang sebagai user.');
-  const profileSnapshot = await getDoc(doc(database, 'users', authenticatedUid));
+  let profileSnapshot;
+  try {
+    profileSnapshot = await getDoc(doc(database, 'users', authenticatedUid));
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String(error.code)
+      : 'unknown';
+    const message = error instanceof Error ? error.message : 'Kesalahan Firebase tidak diketahui.';
+    throw new Error(`Gagal membaca profil user di proyek "${firebaseProjectId}" (${code}): ${message}`);
+  }
   const profile = profileSnapshot.data();
   const portalId = normalizePortalAddress(String(profile?.portalAddress || ''));
   const location = String(profile?.location || '');
-  if (!profileSnapshot.exists() || profile?.role !== 'user' || !portalId || !location) return [];
+  if (!profileSnapshot.exists()) {
+    throw new Error(`Profil user tidak ditemukan di proyek "${firebaseProjectId}".`);
+  }
+  if (profile?.role !== 'user') {
+    throw new Error(`Profil akun di proyek "${firebaseProjectId}" tidak memiliki role user yang valid.`);
+  }
+  if (!portalId || !location) {
+    throw new Error(`Profil user di proyek "${firebaseProjectId}" belum memiliki ${[
+      !portalId ? 'portalAddress' : '',
+      !location ? 'location' : '',
+    ].filter(Boolean).join(' dan ')}.`);
+  }
 
   let snapshot;
   try {
@@ -76,8 +96,11 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
       where('targetWilayahList', 'array-contains', location)
     ));
   } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String(error.code)
+      : 'unknown';
     const message = error instanceof Error ? error.message : 'Kesalahan Firestore tidak diketahui.';
-    throw new Error(`Gagal membaca PM untuk portal "${portalId}" dan lokasi "${location}": ${message}`);
+    throw new Error(`Gagal membaca PM di proyek "${firebaseProjectId}" untuk portal "${portalId}" dan lokasi "${location}" (${code}): ${message}`);
   }
   return snapshot.docs.map((item) => ({
     ...(item.data() as PmItem),
