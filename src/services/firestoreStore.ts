@@ -88,25 +88,50 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
     ].filter(Boolean).join(' dan ')}.`);
   }
 
-  let snapshot;
+  let assignmentsSnapshot;
   try {
-    snapshot = await getDocs(query(
-      collection(database, 'jobs'),
-      where('portalId', '==', portalId),
-      where('targetWilayahList', 'array-contains', location)
-    ));
+    assignmentsSnapshot = await getDocs(
+      collection(database, 'users', authenticatedUid, 'jobAssignments')
+    );
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error
       ? String(error.code)
       : 'unknown';
     const message = error instanceof Error ? error.message : 'Kesalahan Firestore tidak diketahui.';
-    throw new Error(`Gagal membaca PM di proyek "${firebaseProjectId}" untuk portal "${portalId}" dan lokasi "${location}" (${code}): ${message}`);
+    throw new Error(`Gagal membaca daftar penugasan user di proyek "${firebaseProjectId}" (${code}): ${message}`);
   }
-  return snapshot.docs.map((item) => ({
-    ...(item.data() as PmItem),
-    id: item.id,
-    portalId,
+
+  const assignedJobIds = assignmentsSnapshot.docs
+    .filter((assignment) => {
+      const data = assignment.data();
+      return data.userUid === authenticatedUid
+        && normalizePortalAddress(String(data.portalId || '')) === portalId
+        && data.location === location;
+    })
+    .map((assignment) => assignment.id);
+  const jobs = await Promise.all(assignedJobIds.map(async (jobId) => {
+    try {
+      const jobSnapshot = await getDoc(doc(database, 'jobs', jobId));
+      if (!jobSnapshot.exists()) {
+        throw new Error('dokumen PM tidak ditemukan');
+      }
+      const job = jobSnapshot.data() as PmItem;
+      if (
+        normalizePortalAddress(String(job.portalId || '')) !== portalId
+        || !job.targetWilayahList?.includes(location)
+      ) {
+        throw new Error('portal atau lokasi pada PM tidak lagi cocok dengan penugasannya');
+      }
+      return { ...job, id: jobSnapshot.id, portalId };
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : 'invalid-assignment';
+      const message = error instanceof Error ? error.message : 'Kesalahan Firestore tidak diketahui.';
+      throw new Error(`Gagal membaca PM "${jobId}" di proyek "${firebaseProjectId}" (${code}): ${message}`);
+    }
   }));
+  return jobs;
 }
 
 export async function saveJobProgressToFirestore(
@@ -241,6 +266,12 @@ export async function saveAdminJobToFirestore(job: PmItem, adminUid: string, por
       : job.createdAt || new Date().toISOString(),
     ...creatorMetadata,
   });
+  const savedJob = {
+    ...job,
+    portalId: normalizedPortalId,
+    createdBy: String(creatorMetadata.createdBy || adminUid),
+  };
+  await assignExistingAdminJobToUsers(savedJob, adminUid, assignedAccounts);
   return normalizedPortalId;
 }
 
@@ -256,6 +287,36 @@ export async function assignExistingAdminJobToUsers(
     .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
     .map((account) => account.uid as string);
   await updateDoc(doc(database, 'jobs', job.id), { targetUserUids });
+
+  const recipients = new Map(
+    accounts
+      .filter((account) =>
+        account.role === 'user'
+        && account.uid
+        && account.location
+        && targetLocations.has(account.location)
+      )
+      .map((account) => [account.uid as string, account])
+  );
+  await Promise.all(accounts.filter((account) => account.uid).map(async (account) => {
+    const userUid = account.uid as string;
+    const assignmentRef = doc(database, 'users', userUid, 'jobAssignments', job.id);
+    if (recipients.has(userUid)) {
+      await setDoc(assignmentRef, {
+        jobId: job.id,
+        userUid,
+        location: account.location,
+        portalId: normalizePortalAddress(job.portalId || ''),
+        createdBy: adminUid,
+      });
+      return;
+    }
+
+    const existingAssignment = await getDoc(assignmentRef);
+    if (existingAssignment.exists() && existingAssignment.data().createdBy === adminUid) {
+      await deleteDoc(assignmentRef);
+    }
+  }));
 }
 
 export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string): Promise<void> {

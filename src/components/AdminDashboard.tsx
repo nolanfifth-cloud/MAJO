@@ -270,8 +270,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
         void Promise.all(
           jobsToReconcileRecipients.map((job) => assignExistingAdminJobToUsers(job, currentUser?.uid || '', accounts))
-        ).catch(() => {
-          // Existing jobs remain available to admins if recipient sync is denied.
+        ).catch((error: unknown) => {
+          console.error('Gagal menyinkronkan penugasan PM ke akun user.', error);
+          triggerBottomToast(
+            'Penugasan user belum tersinkron',
+            'Buka kembali dashboard admin atau simpan ulang PM setelah memeriksa akses Firestore.',
+            'error'
+          );
         });
       }
     }).catch(() => {
