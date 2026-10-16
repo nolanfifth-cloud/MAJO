@@ -1199,7 +1199,15 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                 </div>
 
                 {isJobsLoading ? (
-                  <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Memuat penugasan admin...</div>
+                  <div
+                    aria-busy="true"
+                    aria-live="polite"
+                    className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500"
+                    role="status"
+                  >
+                    <span aria-hidden="true" className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
+                    Memuat penugasan admin...
+                  </div>
                 ) : jobsLoadError ? (
                   <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900" role="alert">
                     <p className="font-bold">Penugasan PM gagal dimuat</p>

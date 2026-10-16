@@ -22,9 +22,27 @@ const ForgotPasswordView = lazy(() => import('./components/ForgotPasswordView').
 const AdminDashboard = lazy(() => import('./components/AdminDashboard').then((module) => ({ default: module.AdminDashboard })));
 const UserDashboard = lazy(() => import('./components/UserDashboard').then((module) => ({ default: module.UserDashboard })));
 
+function PageLoading({ message }: { message: string }) {
+  return (
+    <main
+      aria-busy="true"
+      aria-live="polite"
+      className="flex min-h-screen w-full flex-col items-center justify-center gap-4 bg-surface-container-lowest px-5 text-center"
+      role="status"
+    >
+      <span
+        aria-hidden="true"
+        className="h-10 w-10 animate-spin rounded-full border-4 border-primary/15 border-t-primary"
+      />
+      <span className="text-sm font-semibold text-on-surface-variant">{message}</span>
+    </main>
+  );
+}
+
 export default function App() {
   const [currentView, setCurrentView] = useState<AuthView>('login');
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authRestoreError, setAuthRestoreError] = useState('');
   const [prefilledUsername, setPrefilledUsername] = useState('');
   const [currentUser, setCurrentUser] = useState<{
     uid?: string;
@@ -84,8 +102,15 @@ export default function App() {
           setActivePortalAddress(restoredUser.portalAddress, restoredUser.uid || restoredUser.username);
         }
         setCurrentView(account.role === 'admin' ? 'admin_dashboard' : 'user_dashboard');
-      } catch {
-        if (!cancelled) setCurrentView('login');
+      } catch (error) {
+        if (!cancelled) {
+          setCurrentView('login');
+          setAuthRestoreError(
+            error instanceof Error
+              ? error.message
+              : 'Sesi berhasil ditemukan, tetapi profil Firebase gagal dimuat.'
+          );
+        }
       } finally {
         if (!cancelled) setIsAuthLoading(false);
       }
@@ -144,16 +169,58 @@ export default function App() {
     if (firebaseAuth) await signOut(firebaseAuth);
     localStorage.removeItem('majo_session');
     localStorage.removeItem('majo_active_portal_address');
+    setAuthRestoreError('');
     setCurrentUser({ username: '', name: '', role: 'user', location: '', email: '', portalAddress: '', createdAt: '' });
     setCurrentView('login');
   };
 
   if (isAuthLoading) {
-    return <div className="min-h-screen w-full bg-surface-container-lowest" />;
+    return <PageLoading message="Memeriksa sesi akun..." />;
+  }
+
+  if (authRestoreError) {
+    return (
+      <main className="flex min-h-screen w-full items-center justify-center bg-surface-container-lowest px-4 py-8">
+        <section
+          aria-labelledby="auth-restore-error-title"
+          className="w-full max-w-lg rounded-2xl border border-error/20 bg-white p-6 shadow-sm sm:p-8"
+          role="alert"
+        >
+          <h1 id="auth-restore-error-title" className="text-lg font-bold text-on-surface">
+            Sesi Firebase gagal dipulihkan
+          </h1>
+          <p className="mt-3 break-words text-sm leading-relaxed text-on-surface-variant">
+            {authRestoreError}
+          </p>
+          <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                void handleLogout().catch((error: unknown) => {
+                  setAuthRestoreError(
+                    error instanceof Error ? error.message : 'Gagal mengakhiri sesi Firebase.'
+                  );
+                });
+              }}
+              className="min-h-11 rounded-xl border border-outline-variant px-4 py-2 text-sm font-semibold text-on-surface hover:bg-surface-container-low"
+            >
+              Keluar dari sesi
+            </button>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="min-h-11 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:bg-primary-container"
+            >
+              Muat ulang halaman
+            </button>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   return (
-    <Suspense fallback={<div className="min-h-screen w-full bg-surface-container-lowest" />}>
+    <Suspense fallback={<PageLoading message="Memuat halaman..." />}>
       <div className="min-h-screen w-full relative">
         {currentView === 'login' && (
           <LoginView
