@@ -252,7 +252,12 @@ export function subscribeToPasswordResetRequestsFromFirestore(
   );
 }
 
-export async function saveAdminJobToFirestore(job: PmItem, adminUid: string, portalId: string): Promise<string | null> {
+export async function saveAdminJobToFirestore(
+  job: PmItem,
+  adminUid: string,
+  portalId: string,
+  mode: 'create' | 'update' = 'update'
+): Promise<string | null> {
   const database = firestore;
   if (!isFirebaseConfigured || !database) return null;
   if (!adminUid || !portalId) throw new Error('Sesi admin atau alamat portal tidak tersedia.');
@@ -263,16 +268,21 @@ export async function saveAdminJobToFirestore(job: PmItem, adminUid: string, por
     .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
     .map((account) => account.uid as string);
   const jobRef = doc(database, 'jobs', job.id);
-  const existingJobSnapshot = await getDoc(jobRef);
-  const existingJob = existingJobSnapshot.exists() ? existingJobSnapshot.data() : null;
+  const existingJobSnapshot = mode === 'update' ? await getDoc(jobRef) : null;
+  if (mode === 'update' && !existingJobSnapshot?.exists()) {
+    throw new Error(`PM "${job.id}" tidak ditemukan untuk diperbarui.`);
+  }
+  const existingJob = existingJobSnapshot?.exists() ? existingJobSnapshot.data() : null;
   if (existingJob && normalizePortalAddress(String(existingJob.portalId || '')) !== normalizedPortalId) {
     throw new Error('Pekerjaan ini bukan bagian dari portal admin yang sedang aktif.');
   }
-  const creatorMetadata = existingJobSnapshot.exists()
+  const creatorMetadata = mode === 'create'
+    ? { createdBy: adminUid }
+    : existingJobSnapshot?.exists()
     ? existingJob && Object.prototype.hasOwnProperty.call(existingJob, 'createdBy')
       ? { createdBy: existingJob.createdBy }
       : {}
-    : { createdBy: job.createdBy || adminUid };
+    : {};
   await setDoc(jobRef, {
     ...job,
     portalId: normalizedPortalId,
@@ -314,24 +324,15 @@ export async function assignExistingAdminJobToUsers(
       )
       .map((account) => [account.uid as string, account])
   );
-  await Promise.all(accounts.filter((account) => account.uid).map(async (account) => {
-    const userUid = account.uid as string;
+  await Promise.all([...recipients.entries()].map(async ([userUid, account]) => {
     const assignmentRef = doc(database, 'users', userUid, 'jobAssignments', job.id);
-    if (recipients.has(userUid)) {
-      await setDoc(assignmentRef, {
-        jobId: job.id,
-        userUid,
-        location: account.location,
-        portalId: normalizePortalAddress(job.portalId || ''),
-        createdBy: adminUid,
-      });
-      return;
-    }
-
-    const existingAssignment = await getDoc(assignmentRef);
-    if (existingAssignment.exists() && existingAssignment.data().createdBy === adminUid) {
-      await deleteDoc(assignmentRef);
-    }
+    await setDoc(assignmentRef, {
+      jobId: job.id,
+      userUid,
+      location: account.location,
+      portalId: normalizePortalAddress(job.portalId || ''),
+      createdBy: adminUid,
+    });
   }));
 }
 

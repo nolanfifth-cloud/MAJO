@@ -189,7 +189,12 @@ service cloud.firestore {
           signedIn()
           && request.auth.uid == userId
           && resource.data.userUid == request.auth.uid
-          && !exists(/databases/$(database)/documents/jobs/$(jobId))
+          && (
+            !exists(/databases/$(database)/documents/jobs/$(jobId))
+            || get(/databases/$(database)/documents/jobs/$(jobId)).data.portalId != resource.data.portalId
+            || !(get(/databases/$(database)/documents/jobs/$(jobId)).data.targetWilayahList is list)
+            || !(resource.data.location in get(/databases/$(database)/documents/jobs/$(jobId)).data.targetWilayahList)
+          )
         );
       }
     }

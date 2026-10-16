@@ -687,7 +687,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         newPm.portalId = await saveAdminJobToFirestore(
           newPm,
           currentUser?.uid || '',
-          currentUser?.portalAddress || ''
+          currentUser?.portalAddress || '',
+          'create'
         ) || undefined;
       } catch (error) {
         triggerBottomToast(
@@ -727,7 +728,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         updatedPm.portalId = await saveAdminJobToFirestore(
           updatedPm,
           currentUser?.uid || '',
-          currentUser?.portalAddress || ''
+          currentUser?.portalAddress || '',
+          'update'
         ) || updatedPm.portalId;
       } catch (error) {
         triggerBottomToast(
@@ -1088,7 +1090,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 newPm.portalId = await saveAdminJobToFirestore(
                   newPm,
                   currentUser?.uid || '',
-                  currentUser?.portalAddress || ''
+                  currentUser?.portalAddress || '',
+                  'create'
                 ) || undefined;
                 setPmList((prev) => {
                   const updated = [newPm, ...prev];
