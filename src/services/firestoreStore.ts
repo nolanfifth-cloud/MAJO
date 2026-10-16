@@ -110,10 +110,12 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
     })
     .map((assignment) => assignment.id);
   const jobs = await Promise.all(assignedJobIds.map(async (jobId) => {
+    const assignmentRef = doc(database, 'users', authenticatedUid, 'jobAssignments', jobId);
     try {
       const jobSnapshot = await getDoc(doc(database, 'jobs', jobId));
       if (!jobSnapshot.exists()) {
-        throw new Error('dokumen PM tidak ditemukan');
+        await deleteDoc(assignmentRef);
+        return null;
       }
       const job = jobSnapshot.data() as PmItem;
       if (
@@ -128,10 +130,24 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
         ? String(error.code)
         : 'invalid-assignment';
       const message = error instanceof Error ? error.message : 'Kesalahan Firestore tidak diketahui.';
+      if (code === 'permission-denied') {
+        try {
+          await deleteDoc(assignmentRef);
+          return null;
+        } catch (cleanupError) {
+          const cleanupMessage = cleanupError instanceof Error
+            ? cleanupError.message
+            : 'Kesalahan Firestore tidak diketahui.';
+          throw new Error(
+            `Gagal membaca PM "${jobId}" di proyek "${firebaseProjectId}" (${code}): ${message} ` +
+            `Pembersihan assignment lama juga gagal: ${cleanupMessage}`
+          );
+        }
+      }
       throw new Error(`Gagal membaca PM "${jobId}" di proyek "${firebaseProjectId}" (${code}): ${message}`);
     }
   }));
-  return jobs;
+  return jobs.filter((job): job is PmItem => job !== null);
 }
 
 export async function saveJobProgressToFirestore(

@@ -182,8 +182,15 @@ service cloud.firestore {
             jobId,
             request.resource.data.location
           );
-        allow delete: if isPortalAdmin(resource.data.portalId)
-          && resource.data.createdBy == request.auth.uid;
+        allow delete: if (
+          isPortalAdmin(resource.data.portalId)
+          && resource.data.createdBy == request.auth.uid
+        ) || (
+          signedIn()
+          && request.auth.uid == userId
+          && resource.data.userUid == request.auth.uid
+          && !exists(/databases/$(database)/documents/jobs/$(jobId))
+        );
       }
     }
 
