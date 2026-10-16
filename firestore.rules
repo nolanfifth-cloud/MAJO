@@ -36,6 +36,19 @@ service cloud.firestore {
         && resource.data.targetUserUids.hasAny([request.auth.uid]);
     }
 
+    function hasValidJobAssignment(jobId) {
+      let assignmentPath = /databases/$(database)/documents/users/$(request.auth.uid)/jobAssignments/$(jobId);
+      return signedIn()
+        && exists(assignmentPath)
+        && get(assignmentPath).data.userUid == request.auth.uid
+        && get(assignmentPath).data.jobId == jobId
+        && isPortalUser(resource.data.portalId)
+        && get(assignmentPath).data.portalId == resource.data.portalId
+        && get(assignmentPath).data.location == profile().location
+        && resource.data.targetWilayahList is list
+        && profile().location in resource.data.targetWilayahList;
+    }
+
     function portalConfigExists(portalId) {
       return exists(/databases/$(database)/documents/appConfig/$(portalId));
     }
@@ -151,7 +164,11 @@ service cloud.firestore {
       allow delete: if false;
 
       match /jobAssignments/{jobId} {
-        allow get, list: if signedIn() && request.auth.uid == userId;
+        allow get: if signedIn() && (
+          request.auth.uid == userId
+          || isPortalAdmin(resource.data.portalId)
+        );
+        allow list: if signedIn() && request.auth.uid == userId;
         allow create, update: if isPortalAdmin(request.resource.data.portalId)
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.userUid == userId
@@ -177,6 +194,7 @@ service cloud.firestore {
 
     match /jobs/{jobId} {
       allow get: if isAssignedToJob()
+        || hasValidJobAssignment(jobId)
         || isPortalAdmin(resource.data.portalId)
         || (isPortalUser(resource.data.portalId)
           && resource.data.targetWilayahList is list
