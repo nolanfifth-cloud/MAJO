@@ -109,7 +109,7 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
         && data.location === location;
     })
     .map((assignment) => assignment.id);
-  const jobs = await Promise.all(assignedJobIds.map(async (jobId) => {
+  const jobs: (PmItem | null)[] = await Promise.all(assignedJobIds.map(async (jobId) => {
     const assignmentRef = doc(database, 'users', authenticatedUid, 'jobAssignments', jobId);
     try {
       const jobSnapshot = await getDoc(doc(database, 'jobs', jobId));
