@@ -24,6 +24,30 @@ const portalDoc = (portalAddress?: string) => {
   return doc(firestore, 'appConfig', portalDocId(portalAddress));
 };
 
+function omitUndefinedFields(value: Record<string, unknown>): Record<string, unknown> {
+  const cleanValue = (fieldValue: unknown): unknown => {
+    if (Array.isArray(fieldValue)) {
+      return fieldValue.map((item) => item === undefined ? null : cleanValue(item));
+    }
+    if (fieldValue && typeof fieldValue === 'object') {
+      const prototype = Object.getPrototypeOf(fieldValue);
+      if (prototype !== Object.prototype && prototype !== null) return fieldValue;
+      return Object.fromEntries(
+        Object.entries(fieldValue)
+          .filter(([, nestedValue]) => nestedValue !== undefined)
+          .map(([key, nestedValue]) => [key, cleanValue(nestedValue)])
+      );
+    }
+    return fieldValue;
+  };
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, fieldValue]) => fieldValue !== undefined)
+      .map(([key, fieldValue]) => [key, cleanValue(fieldValue)])
+  );
+}
+
 export async function loadPortalConfigFromFirestore(portalAddress?: string): Promise<PortalMasterConfig | null> {
   if (!isFirebaseConfigured || !firestore) return null;
   const snapshot = await getDoc(portalDoc(portalAddress));
@@ -167,7 +191,7 @@ export async function saveJobProgressToFirestore(
   });
   if (hasInlinePhoto) throw new Error('Foto belum tersimpan ke Cloudinary; unggah ulang sebelum menyimpan progres.');
   const progressId = `${jobId}_${userUid}`;
-  await setDoc(doc(firestore, 'jobProgress', progressId), {
+  const progressData = omitUndefinedFields({
     jobId,
     userUid,
     location,
@@ -176,7 +200,8 @@ export async function saveJobProgressToFirestore(
     devices,
     ...(summary || {}),
     updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  });
+  await setDoc(doc(firestore, 'jobProgress', progressId), progressData, { merge: true });
 }
 
 export async function loadJobProgressFromFirestore(portalId: string): Promise<Record<string, unknown>[]> {
