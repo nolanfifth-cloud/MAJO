@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { PmItem, RegisteredAccount, RegionConfig } from '../types';
 import { firebaseAuth, firebaseProjectId, firestore, isFirebaseConfigured } from './firebase';
@@ -403,13 +404,34 @@ export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string
 export async function saveCompletedReportToFirestore(report: Record<string, unknown>, userUid: string, portalId: string): Promise<void> {
   if (!isFirebaseConfigured || !firestore || !userUid || !portalId) return;
   const reportId = String(report.id || `${Date.now()}`);
+  const jobId = String(report.jobId || '');
+  const location = String(report.region || '');
+  const pointsCount = Number(report.pointsCount || 0);
+  if (!jobId || !location || !Number.isFinite(pointsCount) || pointsCount < 1) {
+    throw new Error('Data laporan tidak lengkap untuk menandai PM selesai.');
+  }
+  const normalizedPortalId = normalizePortalAddress(portalId);
   const reportData = omitUndefinedFields({
     ...report,
-    portalId: normalizePortalAddress(portalId),
+    portalId: normalizedPortalId,
     submittedBy: userUid,
     savedAt: new Date().toISOString(),
   });
-  await setDoc(doc(firestore, 'completedReports', reportId), reportData);
+  const batch = writeBatch(firestore);
+  batch.set(doc(firestore, 'completedReports', reportId), reportData);
+  batch.set(doc(firestore, 'jobProgress', `${jobId}_${userUid}`), {
+    jobId,
+    userUid,
+    location,
+    portalId: normalizedPortalId,
+    doneCount: pointsCount,
+    totalCount: pointsCount,
+    progress: 100,
+    submitted: true,
+    completedReportId: reportId,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+  await batch.commit();
 }
 
 export async function loadCompletedReportsFromFirestore(userUid?: string, portalId?: string): Promise<Record<string, unknown>[]> {

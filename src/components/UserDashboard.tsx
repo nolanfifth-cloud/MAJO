@@ -392,9 +392,13 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       currentUser.portalAddress || '',
       {
         progress: activeJob.devices.length
-          ? Math.round((activeJob.devices.filter((device) => device.statusState === 'DONE').length / activeJob.devices.length) * 100)
+          ? Math.round((activeJob.devices.filter((device) =>
+            device.statusState === 'DONE' || device.statusState === 'UPDATE'
+          ).length / activeJob.devices.length) * 100)
           : 0,
-        doneCount: activeJob.devices.filter((device) => device.statusState === 'DONE').length,
+        doneCount: activeJob.devices.filter((device) =>
+          device.statusState === 'DONE' || device.statusState === 'UPDATE'
+        ).length,
         totalCount: activeJob.devices.length,
       },
       currentUser.name || currentUser.username

@@ -89,7 +89,13 @@ const applyJobProgress = (jobs: PmItem[], snapshots: Record<string, unknown>[]):
     const jobSnapshots = (progressByJob.get(job.id) || []).filter((snapshot) =>
       recipients.size === 0 || recipients.has(String(snapshot.userUid || ''))
     );
-    const doneCount = jobSnapshots.reduce((total, snapshot) => total + Number(snapshot.doneCount || 0), 0);
+    const doneCount = jobSnapshots.reduce((total, snapshot) => {
+      const snapshotDoneCount = Number(snapshot.doneCount || 0);
+      const snapshotTotalCount = Number(snapshot.totalCount || 0);
+      return total + (snapshot.submitted === true
+        ? Math.max(snapshotDoneCount, snapshotTotalCount)
+        : snapshotDoneCount);
+    }, 0);
     const expectedTotal = job.totalCount * Math.max(recipients.size, 1);
     const totalCount = Math.max(
       jobSnapshots.reduce((total, snapshot) => total + Number(snapshot.totalCount || 0), 0),
