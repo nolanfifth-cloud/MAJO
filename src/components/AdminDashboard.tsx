@@ -6,6 +6,7 @@ import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
 import { downloadPmReportExcel } from '../services/excelExport';
 import { getPortalConfig } from '../services/workflowStore';
+import { applyJobProgress } from '../services/jobProgress';
 import {
   loadJobProgressFromFirestore,
   subscribeToJobProgressFromFirestore,
@@ -79,70 +80,6 @@ const deduplicateJobs = (jobs: PmItem[]): PmItem[] => {
   return Array.from(uniqueJobs.values());
 };
 
-const applyJobProgress = (
-  jobs: PmItem[],
-  snapshots: Record<string, unknown>[],
-  completedReports: Record<string, unknown>[] = []
-): PmItem[] => {
-  const progressByJob = new Map<string, Record<string, unknown>[]>();
-  snapshots.forEach((snapshot) => {
-    const jobId = String(snapshot.jobId || '');
-    if (!jobId) return;
-    progressByJob.set(jobId, [...(progressByJob.get(jobId) || []), snapshot]);
-  });
-  return jobs.map((job) => {
-    const recipients = new Set(job.targetUserUids || []);
-    const jobSnapshotsByUser = new Map((progressByJob.get(job.id) || []).filter((snapshot) =>
-      recipients.size === 0 || recipients.has(String(snapshot.userUid || ''))
-    ).map((snapshot) => [String(snapshot.userUid || ''), snapshot]));
-    completedReports
-      .filter((report) => String(report.jobId || '') === job.id)
-      .forEach((report) => {
-        const userUid = String(report.submittedBy || '');
-        if (!userUid || (recipients.size > 0 && !recipients.has(userUid))) return;
-        const pointsCount = Number(report.pointsCount || 0);
-        const assignedChecklistCount = Number(job.totalCount || pointsCount);
-        const previous = jobSnapshotsByUser.get(userUid) || {};
-        jobSnapshotsByUser.set(userUid, {
-          ...previous,
-          userUid,
-          location: String(report.region || previous.location || ''),
-          updatedAt: String(report.savedAt || report.completedAt || previous.updatedAt || ''),
-          submitted: true,
-          doneCount: Math.max(Number(previous.doneCount || 0), assignedChecklistCount),
-          totalCount: Math.max(Number(previous.totalCount || 0), assignedChecklistCount),
-        });
-      });
-    const jobSnapshots = [...jobSnapshotsByUser.values()];
-    const doneCount = jobSnapshots.reduce((total, snapshot) => {
-      const snapshotDoneCount = Number(snapshot.doneCount || 0);
-      const snapshotTotalCount = Number(snapshot.totalCount || 0);
-      return total + (snapshot.submitted === true
-        ? Math.max(snapshotDoneCount, snapshotTotalCount, Number(job.totalCount || 0))
-        : snapshotDoneCount);
-    }, 0);
-    const expectedTotal = job.totalCount * Math.max(recipients.size, 1);
-    const totalCount = Math.max(
-      jobSnapshots.reduce((total, snapshot) => total + Number(snapshot.totalCount || 0), 0),
-      expectedTotal
-    );
-    const progress = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
-    return {
-      ...job,
-      progress,
-      doneCount,
-      totalCount,
-      pendingCount: Math.max(0, totalCount - doneCount),
-      fieldProgress: jobSnapshots.map((snapshot) => ({
-        userUid: String(snapshot.userUid || ''),
-        technicianName: String(snapshot.technicianName || ''),
-        location: String(snapshot.location || ''),
-        updatedAt: String(snapshot.updatedAt || ''),
-        devices: Array.isArray(snapshot.devices) ? snapshot.devices as Record<string, unknown>[] : [],
-      })),
-    };
-  });
-};
 /*
   {
     id: 'pm-row-1',
