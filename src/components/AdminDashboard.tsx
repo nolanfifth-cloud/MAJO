@@ -99,7 +99,8 @@ const applyJobProgress = (
       .forEach((report) => {
         const userUid = String(report.submittedBy || '');
         if (!userUid || (recipients.size > 0 && !recipients.has(userUid))) return;
-        const pointsCount = Number(report.pointsCount || job.totalCount || 0);
+        const pointsCount = Number(report.pointsCount || 0);
+        const assignedChecklistCount = Number(job.totalCount || pointsCount);
         const previous = jobSnapshotsByUser.get(userUid) || {};
         jobSnapshotsByUser.set(userUid, {
           ...previous,
@@ -107,8 +108,8 @@ const applyJobProgress = (
           location: String(report.region || previous.location || ''),
           updatedAt: String(report.savedAt || report.completedAt || previous.updatedAt || ''),
           submitted: true,
-          doneCount: Math.max(Number(previous.doneCount || 0), pointsCount),
-          totalCount: Math.max(Number(previous.totalCount || 0), pointsCount),
+          doneCount: Math.max(Number(previous.doneCount || 0), assignedChecklistCount),
+          totalCount: Math.max(Number(previous.totalCount || 0), assignedChecklistCount),
         });
       });
     const jobSnapshots = [...jobSnapshotsByUser.values()];
@@ -116,7 +117,7 @@ const applyJobProgress = (
       const snapshotDoneCount = Number(snapshot.doneCount || 0);
       const snapshotTotalCount = Number(snapshot.totalCount || 0);
       return total + (snapshot.submitted === true
-        ? Math.max(snapshotDoneCount, snapshotTotalCount)
+        ? Math.max(snapshotDoneCount, snapshotTotalCount, Number(job.totalCount || 0))
         : snapshotDoneCount);
     }, 0);
     const expectedTotal = job.totalCount * Math.max(recipients.size, 1);
