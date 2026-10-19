@@ -35,6 +35,18 @@ test('completion is counted once per location even when multiple users are assig
   assert.equal(job.totalCount, 10);
 });
 
+test('a submitted report completes its location even when the cached recipient list is stale', () => {
+  const [job] = applyJobProgress(
+    [createJob(['Medan'], ['another-user'])],
+    [{ jobId: 'pm-test', userUid: 'user-1', location: 'Medan', doneCount: 5, totalCount: 10 }],
+    [{ jobId: 'pm-test', submittedBy: 'user-1', region: 'Medan', pointsCount: 5 }]
+  );
+
+  assert.equal(job.progress, 100);
+  assert.equal(job.doneCount, 10);
+  assert.equal(job.totalCount, 10);
+});
+
 test('completion remains location-weighted when a PM targets multiple locations', () => {
   const [job] = applyJobProgress(
     [createJob(['Medan', 'Jakarta'], ['user-1', 'user-2'])],

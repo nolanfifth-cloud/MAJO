@@ -20,7 +20,7 @@ export const applyJobProgress = (
       .filter((report) => String(report.jobId || '') === job.id)
       .forEach((report) => {
         const userUid = String(report.submittedBy || '');
-        if (!userUid || (recipients.size > 0 && !recipients.has(userUid))) return;
+        if (!userUid) return;
         const pointsCount = Number(report.pointsCount || 0);
         const assignedChecklistCount = Number(job.totalCount || pointsCount);
         const previous = jobSnapshotsByUser.get(userUid) || {};
