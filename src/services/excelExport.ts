@@ -13,6 +13,56 @@ const COLORS = {
   white: 'FFFFFF',
 };
 
+async function addPhotoEvidence(
+  workbook: ExcelJS.Workbook,
+  worksheet: ExcelJS.Worksheet,
+  items: Array<{ file: string; photoUrl?: string }>,
+  firstDataRow: number,
+  photoColumn: number
+): Promise<void> {
+  await Promise.all(items.map(async (item, index) => {
+    const rowNumber = firstDataRow + index;
+    const photoCell = worksheet.getCell(rowNumber, photoColumn + 1);
+    worksheet.getRow(rowNumber).height = 76;
+    if (!item.photoUrl) {
+      photoCell.value = item.file || 'Foto belum tersedia';
+      return;
+    }
+
+    let bitmap: ImageBitmap;
+    try {
+      const response = await fetch(item.photoUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      bitmap = await createImageBitmap(await response.blob());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'kesalahan jaringan';
+      throw new Error(`Foto bukti "${item.file}" gagal diunduh untuk Excel: ${message}`);
+    }
+
+    const maxWidth = 180;
+    const maxHeight = 66;
+    const scale = Math.min(maxWidth / bitmap.width, maxHeight / bitmap.height, 1);
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      throw new Error(`Foto bukti "${item.file}" tidak dapat diproses untuk Excel.`);
+    }
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const imageId = workbook.addImage({ base64: canvas.toDataURL('image/png'), extension: 'png' });
+    photoCell.value = item.file ? { text: item.file, hyperlink: item.photoUrl } : 'Foto terlampir';
+    worksheet.addImage(imageId, {
+      tl: { col: photoColumn, row: rowNumber - 1 },
+      ext: { width, height },
+    });
+  }));
+}
+
 export interface CompletedPmReportExport {
   id: string;
   year?: number;
@@ -29,6 +79,7 @@ export interface CompletedPmReportExport {
     device: string;
     duration: string;
     file: string;
+    photoUrl?: string;
     time: string;
     desc: string;
     status?: string;
@@ -136,6 +187,7 @@ export async function downloadCompletedPmReport(report: CompletedPmReportExport)
     notes: item.desc,
   }));
   styleBodyRows(rows);
+  await addPhotoEvidence(workbook, details, report.subJobs, 2, 6);
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
@@ -233,7 +285,8 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     { header: 'Keterangan', key: 'notes', width: 54 },
   ];
   styleTableHeader(details.getRow(1));
-  const detailRows = reports.flatMap((report) => report.subJobs.map((item) => details.addRow({
+  const detailItems = reports.flatMap((report) => report.subJobs.map((item) => ({ report, item })));
+  const detailRows = detailItems.map(({ report, item }) => details.addRow({
     reportId: report.id,
     title: report.title,
     subtask: item.name,
@@ -243,8 +296,15 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     photo: item.file,
     time: item.time,
     notes: item.desc,
-  })));
+  }));
   styleBodyRows(detailRows);
+  await addPhotoEvidence(
+    workbook,
+    details,
+    detailItems.map(({ item }) => item),
+    2,
+    6
+  );
   details.autoFilter = { from: 'A1', to: 'I1' };
 
   const buffer = await workbook.xlsx.writeBuffer();

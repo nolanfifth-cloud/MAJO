@@ -18,7 +18,10 @@ import {
   CheckCheck,
   Check,
 } from 'lucide-react';
-import { loadCompletedReportsFromFirestore } from '../services/firestoreStore';
+import {
+  loadCompletedReportsFromFirestore,
+  loadJobProgressForUserFromFirestore,
+} from '../services/firestoreStore';
 import { downloadCompletedPmReport, downloadCompletedPmReports } from '../services/excelExport';
 
 export interface SubJobDetail {
@@ -27,6 +30,7 @@ export interface SubJobDetail {
   device: string;
   duration: string;
   file: string;
+  photoUrl?: string;
   time: string;
   desc: string;
   status?: string;
@@ -34,6 +38,7 @@ export interface SubJobDetail {
 
 export interface CompletedPMItem {
   id: string;
+  jobId?: string;
   portalId?: string;
   submittedBy?: string;
   year: number;
@@ -608,6 +613,32 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [isExportingAll, setIsExportingAll] = useState(false);
 
+  const attachProgressPhotos = async (reports: CompletedPMItem[]): Promise<CompletedPMItem[]> => {
+    if (!userUid) return reports;
+    const progressSnapshots = await loadJobProgressForUserFromFirestore(userUid);
+    const progressByJobId = new Map(
+      progressSnapshots.map((snapshot) => [String(snapshot.jobId || ''), snapshot])
+    );
+    return reports.map((report) => {
+      const snapshot = progressByJobId.get(String(report.jobId || ''));
+      const devices = Array.isArray(snapshot?.devices)
+        ? snapshot.devices as Record<string, unknown>[]
+        : [];
+      return {
+        ...report,
+        subJobs: report.subJobs.map((subJob, index) => {
+          if (subJob.photoUrl) return subJob;
+          const formData = devices[index]?.formData;
+          if (!formData || typeof formData !== 'object') return subJob;
+          const photoUrl = (formData as Record<string, unknown>).photo;
+          return typeof photoUrl === 'string' && photoUrl.startsWith('https://')
+            ? { ...subJob, photoUrl }
+            : subJob;
+        }),
+      };
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
     setCloudReports([]);
@@ -773,7 +804,8 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
     }
     setIsExportingAll(true);
     try {
-      await downloadCompletedPmReports(filteredData);
+      const reportsWithPhotos = await attachProgressPhotos(filteredData);
+      await downloadCompletedPmReports(reportsWithPhotos);
       onTriggerToast(`Rekap ${filteredData.length} laporan PM berhasil diunduh.`, true);
     } catch (error) {
       onTriggerToast(error instanceof Error ? error.message : 'Gagal mengekspor riwayat PM.', false);
@@ -785,7 +817,8 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
   const handleDownloadSingle = async (report: CompletedPMItem) => {
     setDownloadingReportId(report.id);
     try {
-      await downloadCompletedPmReport(report);
+      const [reportWithPhotos] = await attachProgressPhotos([report]);
+      await downloadCompletedPmReport(reportWithPhotos);
       onTriggerToast(`BAST & Detail Checklist ${report.id} berhasil diunduh.`, true);
     } catch (error) {
       onTriggerToast(

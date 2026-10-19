@@ -547,6 +547,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         device: device.location || 'Perangkat Standar',
         duration: `${device.formData.durasi || '30'} Menit`,
         file: device.formData.photoName || 'foto_inspeksi.jpg',
+        photoUrl: device.formData.photo.startsWith('https://') ? device.formData.photo : '',
         time: device.formData.capturedAt || '',
         conditionValue: device.formData.conditionValue,
         conditionSelection: device.formData.conditionSelection,
