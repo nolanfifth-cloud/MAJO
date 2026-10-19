@@ -452,6 +452,23 @@ export async function loadCompletedReportsFromFirestore(userUid?: string, portal
   return snapshot.docs.map((item) => item.data());
 }
 
+export function subscribeToCompletedReportsFromFirestore(
+  portalId: string,
+  onReports: (reports: Record<string, unknown>[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!isFirebaseConfigured || !firestore || !portalId) return () => undefined;
+  const reportsQuery = query(
+    collection(firestore, 'completedReports'),
+    where('portalId', '==', normalizePortalAddress(portalId))
+  );
+  return onSnapshot(
+    reportsQuery,
+    (snapshot) => onReports(snapshot.docs.map((item) => item.data())),
+    (error) => onError?.(error)
+  );
+}
+
 export function hasRealPortalLocation(config: PortalMasterConfig): boolean {
   return config.masterWilayah.length > 0 || config.masterGroups.some((region: RegionConfig) => region.locations.length > 0);
 }

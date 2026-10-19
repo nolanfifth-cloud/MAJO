@@ -9,6 +9,7 @@ import { getPortalConfig } from '../services/workflowStore';
 import {
   loadJobProgressFromFirestore,
   subscribeToJobProgressFromFirestore,
+  subscribeToCompletedReportsFromFirestore,
   loadPortalConfigFromFirestore,
   loadRegisteredAccountsFromFirestore,
   loadJobsForPortalFromFirestore,
@@ -77,7 +78,11 @@ const deduplicateJobs = (jobs: PmItem[]): PmItem[] => {
   return Array.from(uniqueJobs.values());
 };
 
-const applyJobProgress = (jobs: PmItem[], snapshots: Record<string, unknown>[]): PmItem[] => {
+const applyJobProgress = (
+  jobs: PmItem[],
+  snapshots: Record<string, unknown>[],
+  completedReports: Record<string, unknown>[] = []
+): PmItem[] => {
   const progressByJob = new Map<string, Record<string, unknown>[]>();
   snapshots.forEach((snapshot) => {
     const jobId = String(snapshot.jobId || '');
@@ -86,9 +91,27 @@ const applyJobProgress = (jobs: PmItem[], snapshots: Record<string, unknown>[]):
   });
   return jobs.map((job) => {
     const recipients = new Set(job.targetUserUids || []);
-    const jobSnapshots = (progressByJob.get(job.id) || []).filter((snapshot) =>
+    const jobSnapshotsByUser = new Map((progressByJob.get(job.id) || []).filter((snapshot) =>
       recipients.size === 0 || recipients.has(String(snapshot.userUid || ''))
-    );
+    ).map((snapshot) => [String(snapshot.userUid || ''), snapshot]));
+    completedReports
+      .filter((report) => String(report.jobId || '') === job.id)
+      .forEach((report) => {
+        const userUid = String(report.submittedBy || '');
+        if (!userUid || (recipients.size > 0 && !recipients.has(userUid))) return;
+        const pointsCount = Number(report.pointsCount || job.totalCount || 0);
+        const previous = jobSnapshotsByUser.get(userUid) || {};
+        jobSnapshotsByUser.set(userUid, {
+          ...previous,
+          userUid,
+          location: String(report.region || previous.location || ''),
+          updatedAt: String(report.savedAt || report.completedAt || previous.updatedAt || ''),
+          submitted: true,
+          doneCount: Math.max(Number(previous.doneCount || 0), pointsCount),
+          totalCount: Math.max(Number(previous.totalCount || 0), pointsCount),
+        });
+      });
+    const jobSnapshots = [...jobSnapshotsByUser.values()];
     const doneCount = jobSnapshots.reduce((total, snapshot) => {
       const snapshotDoneCount = Number(snapshot.doneCount || 0);
       const snapshotTotalCount = Number(snapshot.totalCount || 0);
@@ -194,6 +217,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Primary list state
   const [pmList, setPmList] = useState<PmItem[]>(INITIAL_PMS);
   const deletedJobIds = useRef(new Set<string>());
+  const progressSnapshotsRef = useRef<Record<string, unknown>[]>([]);
+  const completedReportsRef = useRef<Record<string, unknown>[]>([]);
   const [connectedTechnicians, setConnectedTechnicians] = useState(0);
   const [configuredRegions, setConfiguredRegions] = useState<string[]>([]);
   const [selectedPmId, setSelectedPmId] = useState<string>('');
@@ -243,10 +268,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       currentUser?.portalAddress || '',
       (snapshots) => {
         if (cancelled) return;
-        setPmList((previous) => applyJobProgress(previous, snapshots));
+        progressSnapshotsRef.current = snapshots;
+        setPmList((previous) => applyJobProgress(previous, snapshots, completedReportsRef.current));
       },
       () => {
         // Keep the last known progress when the live connection is interrupted.
+      }
+    );
+    const unsubscribeReports = subscribeToCompletedReportsFromFirestore(
+      currentUser?.portalAddress || '',
+      (reports) => {
+        if (cancelled) return;
+        completedReportsRef.current = reports;
+        setPmList((previous) => applyJobProgress(previous, progressSnapshotsRef.current, reports));
+      },
+      () => {
+        // Keep the last known completion state when the live connection is interrupted.
       }
     );
     Promise.all([
@@ -265,7 +302,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               .map((account) => account.uid as string);
             return { ...job, targetUserUids };
           });
-        uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots);
+        progressSnapshotsRef.current = progressSnapshots;
+        uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots, completedReportsRef.current);
         setPmList(uniqueCloudJobs);
         setSelectedPmId(uniqueCloudJobs[0]?.id || '');
       }
@@ -291,6 +329,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => {
       cancelled = true;
       unsubscribeProgress();
+      unsubscribeReports();
     };
   }, [currentUser?.portalAddress, currentUser?.uid]);
 
