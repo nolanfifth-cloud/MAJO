@@ -384,6 +384,24 @@ export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string
     }
   });
 
+  const [progressSnapshot, reportsSnapshot] = await Promise.all([
+    getDocs(query(
+      collection(database, 'jobProgress'),
+      where('portalId', '==', activePortalId)
+    )),
+    getDocs(query(
+      collection(database, 'completedReports'),
+      where('portalId', '==', activePortalId)
+    )),
+  ]);
+  const jobProgressDocs = progressSnapshot.docs.filter((snapshot) => snapshot.data().jobId === job.id);
+  const completedReportDocs = reportsSnapshot.docs.filter((snapshot) => snapshot.data().jobId === job.id);
+
+  await Promise.all([
+    ...jobProgressDocs.map((snapshot) => deleteDoc(snapshot.ref)),
+    ...completedReportDocs.map((snapshot) => deleteDoc(snapshot.ref)),
+  ]);
+
   await Promise.all([...recipientUids].map(async (userUid) => {
     try {
       await deleteDoc(doc(database, 'users', userUid, 'jobAssignments', job.id));
@@ -399,6 +417,24 @@ export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string
     }
   }));
   await deleteDoc(doc(database, 'jobs', job.id));
+}
+
+export async function deleteOrphanedJobDataFromFirestore(
+  portalId: string,
+  activeJobIds: ReadonlySet<string>
+): Promise<void> {
+  const database = firestore;
+  if (!isFirebaseConfigured || !database || !portalId) return;
+  const normalizedPortalId = normalizePortalAddress(portalId);
+  const [progressSnapshot, reportsSnapshot] = await Promise.all([
+    getDocs(query(collection(database, 'jobProgress'), where('portalId', '==', normalizedPortalId))),
+    getDocs(query(collection(database, 'completedReports'), where('portalId', '==', normalizedPortalId))),
+  ]);
+  const orphanedRecords = [...progressSnapshot.docs, ...reportsSnapshot.docs].filter((snapshot) => {
+    const jobId = String(snapshot.data().jobId || '');
+    return jobId.length > 0 && !activeJobIds.has(jobId);
+  });
+  await Promise.all(orphanedRecords.map((snapshot) => deleteDoc(snapshot.ref)));
 }
 
 export async function saveCompletedReportToFirestore(report: Record<string, unknown>, userUid: string, portalId: string): Promise<void> {

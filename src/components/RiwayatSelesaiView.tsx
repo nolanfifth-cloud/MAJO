@@ -603,15 +603,37 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 10;
   const [cloudReports, setCloudReports] = useState<CompletedPMItem[]>([]);
+  const [cloudReportsLoaded, setCloudReportsLoaded] = useState(false);
+  const [cloudReportsFailed, setCloudReportsFailed] = useState(false);
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [isExportingAll, setIsExportingAll] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setCloudReports([]);
+    setCloudReportsLoaded(false);
+    setCloudReportsFailed(false);
     loadCompletedReportsFromFirestore(userUid, portalId).then((reports) => {
-      if (!cancelled) setCloudReports(reports as unknown as CompletedPMItem[]);
+      if (cancelled) return;
+      const loadedReports = reports as unknown as CompletedPMItem[];
+      setCloudReports(loadedReports);
+      setCloudReportsLoaded(true);
+      try {
+        const stored = localStorage.getItem('majo_completed_reports');
+        const localReports: CompletedPMItem[] = stored ? JSON.parse(stored) : [];
+        const retainedReports = localReports.filter((report) =>
+          (userUid && report.submittedBy !== userUid)
+          || (portalId && report.portalId !== portalId)
+        );
+        localStorage.setItem(
+          'majo_completed_reports',
+          JSON.stringify([...retainedReports, ...loadedReports])
+        );
+      } catch {
+        // The cloud report list remains authoritative if the local cache is invalid.
+      }
     }).catch(() => {
-      // Local reports remain available when Firestore is unavailable.
+      if (!cancelled) setCloudReportsFailed(true);
     });
     return () => {
       cancelled = true;
@@ -666,8 +688,8 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
     return () => clearInterval(interval);
   }, []);
 
-  // Load only user-submitted reports from localStorage.
   const allPmItems = useMemo(() => {
+    if (cloudReportsLoaded) return cloudReports;
     try {
       const stored = localStorage.getItem('majo_completed_reports');
       if (stored) {
@@ -677,17 +699,15 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
             (!userUid || report.submittedBy === userUid)
             && (!portalId || report.portalId === portalId)
           );
-          const combined = [...cloudReports, ...matchingLocalReports];
-          const unique = Array.from(new Map(combined.map((report) => [report.id, report])).values());
-          return unique;
+          return matchingLocalReports;
         }
       }
-      if (cloudReports.length > 0) return cloudReports;
+      if (cloudReportsFailed && cloudReports.length > 0) return cloudReports;
     } catch {
       // fallback
     }
     return pmCompletedData;
-  }, [cloudReports, userUid, portalId]);
+  }, [cloudReports, cloudReportsLoaded, cloudReportsFailed, userUid, portalId]);
 
   // Filter Data
   const filteredData = useMemo(() => {

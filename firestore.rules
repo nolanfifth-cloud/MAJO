@@ -251,7 +251,8 @@ service cloud.firestore {
           request.resource.data.jobId,
           request.resource.data.location
         );
-      allow delete: if false;
+      allow delete: if isPortalAdmin(resource.data.portalId)
+        && resource.data.jobId is string;
     }
 
     match /completedReports/{reportId} {
@@ -265,7 +266,9 @@ service cloud.firestore {
           request.resource.data.jobId,
           request.resource.data.region
         );
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isPortalAdmin(resource.data.portalId)
+        && resource.data.jobId is string;
     }
   }
 }

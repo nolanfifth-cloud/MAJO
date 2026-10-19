@@ -10,6 +10,7 @@ import {
   loadJobProgressFromFirestore,
   subscribeToJobProgressFromFirestore,
   subscribeToCompletedReportsFromFirestore,
+  deleteOrphanedJobDataFromFirestore,
   loadPortalConfigFromFirestore,
   loadRegisteredAccountsFromFirestore,
   loadJobsForPortalFromFirestore,
@@ -292,6 +293,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       loadJobProgressFromFirestore(currentUser?.portalAddress || ''),
       loadRegisteredAccountsFromFirestore(currentUser?.portalAddress || ''),
     ]).then(([cloudJobs, progressSnapshots, accounts]) => {
+      void deleteOrphanedJobDataFromFirestore(
+        currentUser?.portalAddress || '',
+        new Set(cloudJobs.map((job) => job.id))
+      ).catch((error: unknown) => {
+        console.error('Gagal membersihkan progres atau laporan dari PM yang sudah dihapus.', error);
+        triggerBottomToast(
+          'Pembersihan Riwayat PM Gagal',
+          'Dashboard tetap dimuat, tetapi sebagian riwayat dari PM yang telah dihapus belum berhasil dibersihkan.',
+          'error'
+        );
+      });
       if (!cancelled) {
         let uniqueCloudJobs = deduplicateJobs(cloudJobs)
           .filter((job) => !deletedJobIds.current.has(job.id))
