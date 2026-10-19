@@ -796,7 +796,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsExporting(true);
     try {
-      await downloadPmReportExcel(target);
+      await downloadPmReportExcel(target, completedReportsRef.current);
       setExportToast({
         show: true,
         message: `Laporan ${target.code} (${target.doneCount}/${target.totalCount} Checklist Selesai) tersimpan.`,

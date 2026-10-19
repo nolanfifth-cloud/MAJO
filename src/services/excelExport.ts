@@ -319,7 +319,10 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export async function downloadPmReportExcel(target: PmItem): Promise<void> {
+export async function downloadPmReportExcel(
+  target: PmItem,
+  completedReports: Record<string, unknown>[] = []
+): Promise<void> {
   const ExcelJS = (await import('exceljs')).default;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'MAJO Portal';
@@ -502,6 +505,7 @@ export async function downloadPmReportExcel(target: PmItem): Promise<void> {
         ? device.formData as Record<string, unknown>
         : {};
       return {
+        userUid: String(progress.userUid || ''),
         technicianName: String(progress.technicianName || ''),
         location: String(progress.location || device.location || ''),
         taskTitle: String(device.taskTitle || ''),
@@ -512,6 +516,42 @@ export async function downloadPmReportExcel(target: PmItem): Promise<void> {
           : undefined,
       };
     });
+  });
+  const reportEvidence = completedReports
+    .filter((report) => String(report.jobId || '') === target.id)
+    .flatMap((report) => {
+      const subJobs = Array.isArray(report.subJobs)
+        ? report.subJobs as Record<string, unknown>[]
+        : [];
+      return subJobs.map((subJob) => ({
+        userUid: String(report.submittedBy || ''),
+        technicianName: String(report.technicianName || report.submittedBy || ''),
+        location: String(report.region || ''),
+        taskTitle: String(subJob.name || ''),
+        deviceLocation: String(subJob.device || ''),
+        file: String(subJob.file || 'Foto bukti'),
+        photoUrl: typeof subJob.photoUrl === 'string' && subJob.photoUrl.startsWith('https://')
+          ? subJob.photoUrl
+          : undefined,
+      }));
+    });
+  const normalizedEvidenceValue = (value: string) => value.trim().toLocaleLowerCase('id-ID');
+  reportEvidence.forEach((reportItem) => {
+    const matchingProgressItem = evidenceItems.find((progressItem) =>
+      (!reportItem.userUid || !progressItem.userUid || reportItem.userUid === progressItem.userUid)
+      && normalizedEvidenceValue(progressItem.taskTitle) === normalizedEvidenceValue(reportItem.taskTitle)
+      && normalizedEvidenceValue(progressItem.deviceLocation) === normalizedEvidenceValue(reportItem.deviceLocation)
+    );
+    if (matchingProgressItem) {
+      if (!matchingProgressItem.photoUrl && reportItem.photoUrl) {
+        matchingProgressItem.photoUrl = reportItem.photoUrl;
+      }
+      if (matchingProgressItem.file === 'Foto bukti' && reportItem.file) {
+        matchingProgressItem.file = reportItem.file;
+      }
+    } else {
+      evidenceItems.push(reportItem);
+    }
   });
   const evidenceSheet = workbook.addWorksheet('Foto Bukti', {
     views: [{ state: 'frozen', ySplit: 1 }],
