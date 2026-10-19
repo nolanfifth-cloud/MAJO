@@ -8,6 +8,7 @@ import { downloadPmReportExcel } from '../services/excelExport';
 import { getPortalConfig } from '../services/workflowStore';
 import { applyJobProgress } from '../services/jobProgress';
 import {
+  loadCompletedReportsFromFirestore,
   loadJobProgressFromFirestore,
   subscribeToJobProgressFromFirestore,
   subscribeToCompletedReportsFromFirestore,
@@ -229,7 +230,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       loadJobsForPortalFromFirestore(currentUser?.portalAddress || ''),
       loadJobProgressFromFirestore(currentUser?.portalAddress || ''),
       loadRegisteredAccountsFromFirestore(currentUser?.portalAddress || ''),
-    ]).then(([cloudJobs, progressSnapshots, accounts]) => {
+      loadCompletedReportsFromFirestore(undefined, currentUser?.portalAddress || ''),
+    ]).then(([cloudJobs, progressSnapshots, accounts, completedReports]) => {
       void deleteOrphanedJobDataFromFirestore(
         currentUser?.portalAddress || '',
         new Set(cloudJobs.map((job) => job.id))
@@ -253,7 +255,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             return { ...job, targetUserUids };
           });
         progressSnapshotsRef.current = progressSnapshots;
-        uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots, completedReportsRef.current);
+        completedReportsRef.current = completedReports;
+        uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots, completedReports);
         setPmList(uniqueCloudJobs);
         setSelectedPmId(uniqueCloudJobs[0]?.id || '');
       }
@@ -472,10 +475,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleRefreshAdminData = async () => {
     setIsRefreshing(true);
     try {
-      const [cloudJobs, progressSnapshots, accounts] = await Promise.all([
+      const [cloudJobs, progressSnapshots, accounts, completedReports] = await Promise.all([
         loadJobsForPortalFromFirestore(currentUser?.portalAddress || ''),
         loadJobProgressFromFirestore(currentUser?.portalAddress || ''),
         loadRegisteredAccountsFromFirestore(currentUser?.portalAddress || ''),
+        loadCompletedReportsFromFirestore(undefined, currentUser?.portalAddress || ''),
       ]);
       const refreshedJobs = deduplicateJobs(cloudJobs)
         .filter((job) => !deletedJobIds.current.has(job.id))
@@ -487,7 +491,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             .map((account) => account.uid as string);
           return { ...job, targetUserUids };
         });
-      const nextJobs = applyJobProgress(refreshedJobs, progressSnapshots);
+      progressSnapshotsRef.current = progressSnapshots;
+      completedReportsRef.current = completedReports;
+      const nextJobs = applyJobProgress(refreshedJobs, progressSnapshots, completedReports);
       setPmList(nextJobs);
       setSelectedPmId((selectedId) => nextJobs.some((job) => job.id === selectedId)
         ? selectedId
