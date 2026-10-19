@@ -624,11 +624,25 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
       const devices = Array.isArray(snapshot?.devices)
         ? snapshot.devices as Record<string, unknown>[]
         : [];
+      const devicesById = new Map(devices.map((device) => [String(device.id || ''), device]));
+      const usedDeviceIds = new Set<string>();
       return {
         ...report,
         subJobs: report.subJobs.map((subJob, index) => {
           if (subJob.photoUrl) return subJob;
-          const formData = devices[index]?.formData;
+          const idMatch = subJob.tag?.match(/_subtask_(\d+)-(\d+)$/);
+          const deviceId = idMatch
+            ? `${report.jobId}_subtask_${idMatch[1]}_point_${idMatch[2]}`
+            : '';
+          const deviceById = deviceId ? devicesById.get(deviceId) : undefined;
+          const matchingDevice = deviceById || devices.find((device) =>
+            !usedDeviceIds.has(String(device.id || ''))
+            && String(device.taskTitle || '') === subJob.name
+            && String(device.location || '') === subJob.device
+          ) || devices[index];
+          const matchingDeviceId = String(matchingDevice?.id || '');
+          if (matchingDeviceId) usedDeviceIds.add(matchingDeviceId);
+          const formData = matchingDevice?.formData;
           if (!formData || typeof formData !== 'object') return subJob;
           const photoUrl = (formData as Record<string, unknown>).photo;
           return typeof photoUrl === 'string' && photoUrl.startsWith('https://')

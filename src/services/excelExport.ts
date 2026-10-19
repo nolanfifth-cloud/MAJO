@@ -493,6 +493,48 @@ export async function downloadPmReportExcel(target: PmItem): Promise<void> {
     rows: detailRows.map((row) => [...row, '', '', '', '', '', '', '', '']),
   });
 
+  const evidenceItems = (target.fieldProgress || []).flatMap((progress) => {
+    const devices = Array.isArray(progress.devices)
+      ? progress.devices as Record<string, unknown>[]
+      : [];
+    return devices.map((device) => {
+      const formData = device.formData && typeof device.formData === 'object'
+        ? device.formData as Record<string, unknown>
+        : {};
+      return {
+        technicianName: String(progress.technicianName || ''),
+        location: String(progress.location || device.location || ''),
+        taskTitle: String(device.taskTitle || ''),
+        deviceLocation: String(device.location || ''),
+        file: String(formData.photoName || 'Foto bukti'),
+        photoUrl: typeof formData.photo === 'string' && formData.photo.startsWith('https://')
+          ? formData.photo
+          : undefined,
+      };
+    });
+  });
+  const evidenceSheet = workbook.addWorksheet('Foto Bukti', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+  evidenceSheet.columns = [
+    { header: 'Petugas', key: 'technician', width: 24 },
+    { header: 'Wilayah', key: 'location', width: 22 },
+    { header: 'Something To Do', key: 'task', width: 38 },
+    { header: 'Titik Perangkat', key: 'device', width: 32 },
+    { header: 'Foto Bukti', key: 'photo', width: 28 },
+  ];
+  styleTableHeader(evidenceSheet.getRow(1));
+  const evidenceRows = evidenceItems.map((item) => evidenceSheet.addRow({
+    technician: item.technicianName,
+    location: item.location,
+    task: item.taskTitle,
+    device: item.deviceLocation,
+    photo: item.file,
+  }));
+  styleBodyRows(evidenceRows);
+  await addPhotoEvidence(workbook, evidenceSheet, evidenceItems, 2, 4);
+
   sheet.autoFilter = { from: 'A8', to: 'L9' };
   sheet.pageSetup.printArea = `A1:L${detailStartRow + detailRows.length}`;
   sheet.headerFooter.oddFooter = '&LMAJO Portal&CInternal Report&RPage &P of &N';
