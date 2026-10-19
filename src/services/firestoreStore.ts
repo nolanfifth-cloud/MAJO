@@ -403,12 +403,13 @@ export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string
 export async function saveCompletedReportToFirestore(report: Record<string, unknown>, userUid: string, portalId: string): Promise<void> {
   if (!isFirebaseConfigured || !firestore || !userUid || !portalId) return;
   const reportId = String(report.id || `${Date.now()}`);
-  await setDoc(doc(firestore, 'completedReports', reportId), {
+  const reportData = omitUndefinedFields({
     ...report,
     portalId: normalizePortalAddress(portalId),
     submittedBy: userUid,
     savedAt: new Date().toISOString(),
   });
+  await setDoc(doc(firestore, 'completedReports', reportId), reportData);
 }
 
 export async function loadCompletedReportsFromFirestore(userUid?: string, portalId?: string): Promise<Record<string, unknown>[]> {
