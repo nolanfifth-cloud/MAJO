@@ -1,4 +1,4 @@
-import { PmItem } from '../types';
+import { PmApprovalStatus, PmItem } from '../types';
 
 export const applyJobProgress = (
   jobs: PmItem[],
@@ -16,8 +16,20 @@ export const applyJobProgress = (
     const jobSnapshotsByUser = new Map((progressByJob.get(job.id) || []).filter((snapshot) =>
       recipients.size === 0 || recipients.has(String(snapshot.userUid || ''))
     ).map((snapshot) => [String(snapshot.userUid || ''), snapshot]));
-    completedReports
-      .filter((report) => String(report.jobId || '') === job.id)
+    const jobReports = completedReports.filter((report) => String(report.jobId || '') === job.id);
+    const reportsByLocation = new Map<string, Record<string, unknown>[]>();
+    jobReports.forEach((report) => {
+      const locationKey = String(report.region || '').trim().toLowerCase();
+      if (locationKey) {
+        reportsByLocation.set(locationKey, [...(reportsByLocation.get(locationKey) || []), report]);
+      }
+    });
+    const reportStatus = (report: Record<string, unknown>): PmApprovalStatus =>
+      report.status === 'pending_approval' || report.status === 'needs_revision'
+        ? report.status
+        : 'approved';
+
+    jobReports
       .forEach((report) => {
         const userUid = String(report.submittedBy || '');
         if (!userUid) return;
@@ -94,9 +106,11 @@ export const applyJobProgress = (
           userUid,
           location: String(report.region || previous.location || ''),
           updatedAt: String(report.savedAt || report.completedAt || previous.updatedAt || ''),
-          submitted: true,
+          submitted: reportStatus(report) === 'approved',
+          approvalStatus: reportStatus(report),
+          revisionReason: String(report.revisionReason || ''),
           devices,
-          doneCount: Math.max(Number(previous.doneCount || 0), assignedChecklistCount),
+          doneCount: Math.max(Number(previous.doneCount || 0), pointsCount, assignedChecklistCount),
           totalCount: Math.max(Number(previous.totalCount || 0), assignedChecklistCount),
         });
       });
@@ -120,6 +134,8 @@ export const applyJobProgress = (
         .map((location) => [location.toLowerCase(), location])).values()];
     const doneCount = progressLocations.reduce((total, location) => {
       const locationSnapshots = snapshotsByLocation.get(location.toLowerCase()) || [];
+      const locationReports = reportsByLocation.get(location.toLowerCase()) || [];
+      if (locationReports.length > 0) return total + Number(job.totalCount || locationReports[0].pointsCount || 0);
       const completedSnapshot = locationSnapshots.find((snapshot) => snapshot.submitted === true);
       if (completedSnapshot) return total + Number(job.totalCount || completedSnapshot.totalCount || 0);
       return total + Math.min(
@@ -142,17 +158,69 @@ export const applyJobProgress = (
       }, 0)
     );
     const progress = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
+    const regionsDetail = progressLocations.map((location) => {
+      const locationReports = reportsByLocation.get(location.toLowerCase()) || [];
+      const locationSnapshots = snapshotsByLocation.get(location.toLowerCase()) || [];
+      const status: PmApprovalStatus | undefined = locationReports.length > 0
+        ? locationReports.some((report) => reportStatus(report) === 'approved')
+          ? 'approved'
+          : locationReports.some((report) => reportStatus(report) === 'needs_revision')
+          ? 'needs_revision'
+          : locationReports.some((report) => reportStatus(report) === 'pending_approval')
+            ? 'pending_approval'
+            : undefined
+        : undefined;
+      const completed = locationReports.length > 0
+        ? Number(job.totalCount || locationReports[0].pointsCount || 0)
+        : locationSnapshots.some((snapshot) => snapshot.submitted === true)
+          ? Number(job.totalCount || locationSnapshots.find((snapshot) => snapshot.submitted === true)?.totalCount || 0)
+          : Math.min(
+            Number(job.totalCount || Number.MAX_SAFE_INTEGER),
+            locationSnapshots.reduce(
+              (maximum, snapshot) => Math.max(maximum, Number(snapshot.doneCount || 0)),
+              0
+            )
+          );
+      const locationTotal = Math.max(
+        Number(job.totalCount || 0),
+        ...locationSnapshots.map((snapshot) => Number(snapshot.totalCount || 0))
+      );
+      const percent = locationTotal ? Math.min(100, Math.round((completed / locationTotal) * 100)) : 0;
+      return {
+        name: location,
+        percent: `${percent}%`,
+        color: status === 'needs_revision'
+          ? 'bg-rose-500'
+          : status === 'pending_approval'
+            ? 'bg-amber-500'
+            : 'bg-primary',
+        ...(status ? { approvalStatus: status } : {}),
+      };
+    });
+    const approvalStatus = jobReports.some((report) => reportStatus(report) === 'needs_revision')
+      ? 'needs_revision'
+      : jobReports.some((report) => reportStatus(report) === 'pending_approval')
+        ? 'pending_approval'
+        : progressLocations.length > 0 && progressLocations.every((location) =>
+          (reportsByLocation.get(location.toLowerCase()) || []).some((report) => reportStatus(report) === 'approved')
+        )
+          ? 'approved'
+          : undefined;
     return {
       ...job,
       progress,
       doneCount,
       totalCount,
       pendingCount: Math.max(0, totalCount - doneCount),
+      regionsDetail,
+      ...(approvalStatus ? { approvalStatus } : {}),
       fieldProgress: jobSnapshots.map((snapshot) => ({
         userUid: String(snapshot.userUid || ''),
         technicianName: String(snapshot.technicianName || ''),
         location: String(snapshot.location || ''),
         updatedAt: String(snapshot.updatedAt || ''),
+        approvalStatus: String(snapshot.approvalStatus || ''),
+        revisionReason: String(snapshot.revisionReason || ''),
         devices: Array.isArray(snapshot.devices) ? snapshot.devices as Record<string, unknown>[] : [],
       })),
     };

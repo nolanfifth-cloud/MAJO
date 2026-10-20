@@ -260,13 +260,59 @@ service cloud.firestore {
         || (isPortalUser(resource.data.portalId) && resource.data.submittedBy == request.auth.uid);
       allow create: if isPortalUser(request.resource.data.portalId)
         && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.status == 'pending_approval'
         && request.resource.data.region == profile().location
         && userIsAssignedToJob(
           request.resource.data.portalId,
           request.resource.data.jobId,
           request.resource.data.region
         );
-      allow update: if false;
+      allow update: if (
+        isPortalAdmin(resource.data.portalId)
+        && request.resource.data.portalId == resource.data.portalId
+        && request.resource.data.submittedBy == resource.data.submittedBy
+        && request.resource.data.jobId == resource.data.jobId
+        && request.resource.data.status in ['approved', 'needs_revision']
+        && (
+          request.resource.data.status == 'approved'
+          || (request.resource.data.revisionReason is string
+            && request.resource.data.revisionReason.size() > 0)
+        )
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'revisionReason', 'reviewedBy', 'reviewedAt'])
+      ) || (
+        isPortalUser(resource.data.portalId)
+        && resource.data.submittedBy == request.auth.uid
+        && resource.data.status == 'needs_revision'
+        && request.resource.data.status == 'pending_approval'
+        && request.resource.data.revisionReason == ''
+        && request.resource.data.portalId == resource.data.portalId
+        && request.resource.data.submittedBy == resource.data.submittedBy
+        && request.resource.data.jobId == resource.data.jobId
+        && request.resource.data.region == resource.data.region
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'id',
+          'status',
+          'revisionReason',
+          'reviewedBy',
+          'reviewedAt',
+          'technicianName',
+          'year',
+          'title',
+          'completedAt',
+          'period',
+          'subJobsCount',
+          'pointsCount',
+          'subJobs',
+          'savedAt'
+        ])
+        && userIsAssignedToJob(
+          request.resource.data.portalId,
+          request.resource.data.jobId,
+          request.resource.data.region
+        )
+      );
       allow delete: if isPortalAdmin(resource.data.portalId)
         && resource.data.jobId is string;
     }

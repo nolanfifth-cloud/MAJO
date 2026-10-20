@@ -4,6 +4,7 @@ import { ChecklistItem, PmItem, AuthView } from '../types';
 import { CreateJobsView } from './CreateJobsView';
 import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
+import { ApprovalReport, ApprovalView } from './ApprovalView';
 import { downloadPmReportExcel } from '../services/excelExport';
 import { buildTargetAreaDetails, getPortalConfig } from '../services/workflowStore';
 import { applyJobProgress } from '../services/jobProgress';
@@ -19,6 +20,7 @@ import {
   assignExistingAdminJobToUsers,
   deleteAdminJobFromFirestore,
   saveAdminJobToFirestore,
+  updateCompletedReportReviewInFirestore,
 } from '../services/firestoreStore';
 
 interface AdminDashboardProps {
@@ -160,6 +162,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 }) => {
   // Primary list state
   const [pmList, setPmList] = useState<PmItem[]>(INITIAL_PMS);
+  const [completedReports, setCompletedReports] = useState<Record<string, unknown>[]>([]);
+  const [reviewingReportId, setReviewingReportId] = useState<string | null>(null);
   const deletedJobIds = useRef(new Set<string>());
   const progressSnapshotsRef = useRef<Record<string, unknown>[]>([]);
   const completedReportsRef = useRef<Record<string, unknown>[]>([]);
@@ -224,6 +228,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       (reports) => {
         if (cancelled) return;
         completedReportsRef.current = reports;
+        setCompletedReports(reports);
         setPmList((previous) => applyJobProgress(previous, progressSnapshotsRef.current, reports));
       },
       () => {
@@ -260,6 +265,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           });
         progressSnapshotsRef.current = progressSnapshots;
         completedReportsRef.current = completedReports;
+        setCompletedReports(completedReports);
         uniqueCloudJobs = applyJobProgress(uniqueCloudJobs, progressSnapshots, completedReports);
         setPmList(uniqueCloudJobs);
         setSelectedPmId(uniqueCloudJobs[0]?.id || '');
@@ -318,17 +324,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [currentUser?.portalAddress]);
 
   const completedJobsCount = useMemo(
-    () => pmList.filter((pm) => pm.progress >= 100).length,
+    () => pmList.filter((pm) => pm.approvalStatus === 'approved').length,
     [pmList]
   );
-  const inProgressJobsCount = pmList.filter((pm) => pm.progress < 100).length;
+  const inProgressJobsCount = pmList.filter((pm) => pm.approvalStatus !== 'approved').length;
   const averageCompletion = useMemo(() => {
     if (pmList.length === 0) return 0;
     return Math.round(pmList.reduce((total, pm) => total + Math.max(0, Math.min(100, pm.progress)), 0) / pmList.length);
   }, [pmList]);
 
   // Active navigation tab in sidebar
-  const [activeNav, setActiveNav] = useState<'dashboard' | 'create-jobs' | 'link-portal' | 'pengaturan-profile'>('dashboard');
+  const [activeNav, setActiveNav] = useState<'dashboard' | 'create-jobs' | 'approval' | 'link-portal' | 'pengaturan-profile'>('dashboard');
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const navigateAdminSection = (section: typeof activeNav) => {
     setActiveNav(section);
@@ -418,6 +424,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const markAllNotificationsRead = () => {
     setReadNotificationIds(progressNotifications.map((notification) => notification.id));
+  };
+
+  const pendingApprovalReports = useMemo(() => completedReports
+    .filter((report) => report.status === 'pending_approval')
+    .flatMap((report): ApprovalReport[] => {
+      const id = String(report.id || '');
+      const jobId = String(report.jobId || '');
+      if (!id || !jobId) return [];
+      return [{
+        ...report,
+        id,
+        jobId,
+        title: String(report.title || ''),
+        region: String(report.region || ''),
+        submittedBy: String(report.submittedBy || ''),
+        technicianName: String(report.technicianName || ''),
+        completedAt: String(report.completedAt || ''),
+        savedAt: String(report.savedAt || ''),
+        pointsCount: Number(report.pointsCount || 0),
+        subJobs: Array.isArray(report.subJobs) ? report.subJobs as Record<string, unknown>[] : [],
+      }];
+    }), [completedReports]);
+
+  const handleReviewReport = async (
+    report: ApprovalReport,
+    status: 'approved' | 'needs_revision',
+    reason = ''
+  ): Promise<boolean> => {
+    if (!currentUser?.uid) return false;
+    setReviewingReportId(report.id);
+    try {
+      await updateCompletedReportReviewInFirestore(
+        report.id,
+        currentUser.portalAddress || '',
+        status,
+        reason,
+        currentUser.uid
+      );
+      triggerBottomToast(
+        status === 'approved' ? 'Laporan PM Disetujui' : 'Laporan PM Dikembalikan',
+        status === 'approved'
+          ? 'Lokasi PM telah disahkan dan progres akan diperbarui.'
+          : 'Petugas dapat melihat alasan revisi dan memperbaiki laporan dari dashboard.',
+        status === 'approved' ? 'check_circle' : 'edit'
+      );
+      return true;
+    } catch (error) {
+      triggerBottomToast(
+        'Review Laporan Gagal',
+        error instanceof Error ? error.message : 'Perubahan status laporan tidak berhasil disimpan.',
+        'error'
+      );
+      return false;
+    } finally {
+      setReviewingReportId(null);
+    }
   };
 
   useEffect(() => {
@@ -522,6 +584,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
       progressSnapshotsRef.current = progressSnapshots;
       completedReportsRef.current = completedReports;
+      setCompletedReports(completedReports);
       const nextJobs = applyJobProgress(refreshedJobs, progressSnapshots, completedReports);
       setPmList(nextJobs);
       setSelectedPmId((selectedId) => nextJobs.some((job) => job.id === selectedId)
@@ -921,6 +984,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <button
                 type="button"
+                onClick={() => navigateAdminSection('approval')}
+                className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-DEFAULT transition-colors font-label-md text-left cursor-pointer ${
+                  activeNav === 'approval'
+                    ? 'bg-primary-container text-on-primary-container shadow-xs font-semibold'
+                    : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-normal'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <span className="material-symbols-outlined text-[20px]">fact_check</span>
+                  <span>Approval</span>
+                </span>
+                {pendingApprovalReports.length > 0 && (
+                  <span className="min-w-5 rounded-full bg-amber-500 px-1.5 py-0.5 text-center text-[10px] font-bold text-white">
+                    {pendingApprovalReports.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => navigateAdminSection('link-portal')}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT transition-colors font-label-md text-left cursor-pointer ${
                   activeNav === 'link-portal'
@@ -1161,6 +1244,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   'check_circle'
                 );
               }}
+            />
+          ) : activeNav === 'approval' ? (
+            <ApprovalView
+              reports={pendingApprovalReports}
+              busyReportId={reviewingReportId}
+              onApprove={(report) => handleReviewReport(report, 'approved')}
+              onRequestRevision={(report, reason) => handleReviewReport(report, 'needs_revision', reason)}
             />
           ) : activeNav === 'link-portal' ? (
             <LinkPortalView
@@ -1535,12 +1625,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="py-4 px-6 whitespace-nowrap">
                               <div className="flex flex-col gap-1.5 min-w-[130px]">
                                 <div className="flex items-center justify-between text-body-sm">
-                                  {pm.progress === 100 ? (
+                                  {pm.approvalStatus === 'pending_approval' ? (
+                                    <span className="inline-flex items-center gap-1 text-amber-700 font-label-sm text-label-sm font-semibold">
+                                      <span className="material-symbols-outlined text-[15px]">hourglass_top</span>
+                                      Menunggu Approval
+                                    </span>
+                                  ) : pm.approvalStatus === 'needs_revision' ? (
+                                    <span className="inline-flex items-center gap-1 text-error font-label-sm text-label-sm font-semibold">
+                                      <span className="material-symbols-outlined text-[15px]">edit_note</span>
+                                      Perlu Revisi
+                                    </span>
+                                  ) : pm.approvalStatus === 'approved' ? (
                                     <span className="inline-flex items-center gap-1 text-primary font-label-sm text-label-sm font-semibold">
                                       <span className="material-symbols-outlined text-[15px] text-primary">
                                         check_circle
                                       </span>
                                       Selesai&nbsp;
+                                    </span>
+                                  ) : pm.progress === 100 ? (
+                                    <span className="inline-flex items-center gap-1 text-secondary font-label-sm text-label-sm font-semibold">
+                                      <span className="material-symbols-outlined text-[15px]">task_alt</span>
+                                      Menunggu Laporan
                                     </span>
                                   ) : (
                                     <span className="inline-flex items-center gap-1 text-primary font-label-sm text-label-sm font-semibold">
@@ -1568,7 +1673,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               <div className="inline-flex items-center gap-1 bg-surface-container-low p-1 rounded-DEFAULT border border-outline-variant/30 shadow-xs">
                                 {/* Export Excel Button (Always visible on 100% finished or available) */}
-                                {pm.progress === 100 && (
+                                {pm.approvalStatus === 'approved' && (
                                   <>
                                     <button
                                       type="button"
@@ -1677,7 +1782,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {currentSelectedPm.progress === 100 && (
+                        {currentSelectedPm.approvalStatus === 'approved' && (
                           <button
                             type="button"
                             onClick={() => handleExportExcel(currentSelectedPm)}
@@ -1725,8 +1830,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span className="font-label-sm text-label-sm text-secondary uppercase font-semibold">
                             Status Progres Terkini
                           </span>
-                          <span className="px-2 py-0.5 rounded bg-primary/10 text-primary font-bold text-label-sm flex items-center gap-1">
-                            {currentSelectedPm.progress}% Selesai
+                          <span className={`px-2 py-0.5 rounded font-bold text-label-sm flex items-center gap-1 ${
+                            currentSelectedPm.approvalStatus === 'pending_approval'
+                              ? 'bg-amber-100 text-amber-800'
+                              : currentSelectedPm.approvalStatus === 'needs_revision'
+                                ? 'bg-rose-100 text-rose-800'
+                                : currentSelectedPm.approvalStatus === 'approved'
+                                  ? 'bg-primary/10 text-primary'
+                                  : 'bg-surface-container text-secondary'
+                          }`}>
+                            {currentSelectedPm.approvalStatus === 'pending_approval'
+                              ? 'Menunggu Approval'
+                              : currentSelectedPm.approvalStatus === 'needs_revision'
+                                ? 'Perlu Revisi'
+                                : currentSelectedPm.approvalStatus === 'approved'
+                                  ? 'Disetujui'
+                                  : currentSelectedPm.progress === 100
+                                    ? 'Menunggu Laporan'
+                                    : `${currentSelectedPm.progress}% Progres`}
                           </span>
                         </div>
                         <div className="w-full h-2 bg-surface-container rounded-full overflow-hidden">
@@ -1765,14 +1886,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <div key={idx}>
                               <div className="flex justify-between font-label-sm text-[12px] mb-1">
                                 <span className="font-medium text-on-surface">{reg.name}</span>
-                                <span className="font-bold text-on-surface">{reg.percent}</span>
+                                <span className={`font-bold ${
+                          reg.approvalStatus === 'pending_approval'
+                            ? 'text-amber-700'
+                            : reg.approvalStatus === 'needs_revision'
+                              ? 'text-error'
+                              : 'text-on-surface'
+                                }`}>
+                          {reg.percent}
+                          {reg.approvalStatus === 'pending_approval' ? ' · Menunggu Approval' : ''}
+                          {reg.approvalStatus === 'needs_revision' ? ' · Perlu Revisi' : ''}
+                          {reg.approvalStatus === 'approved' ? ' · Disetujui' : ''}
+                                </span>
                               </div>
                               <div className="w-full h-1.5 bg-surface-container rounded-full overflow-hidden">
                                 <div
-                                  className={`h-full ${reg.color} rounded-full`}
-                                  style={{
-                                    width: reg.percent.includes('%') ? reg.percent : '100%',
-                                  }}
+                          className={`h-full ${reg.color} rounded-full`}
+                          style={{
+                            width: `${Math.min(100, Number(reg.percent.match(/\d+/)?.[0] || 0))}%`,
+                          }}
                                 ></div>
                               </div>
                             </div>

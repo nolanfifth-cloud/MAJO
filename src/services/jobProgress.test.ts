@@ -92,3 +92,69 @@ test('completion remains location-weighted when a PM targets multiple locations'
   assert.equal(job.doneCount, 10);
   assert.equal(job.totalCount, 20);
 });
+
+test('a full report replaces stale partial progress and waits for admin approval', () => {
+  const [job] = applyJobProgress(
+    [createJob(['Medan'], ['user-1'])],
+    [{ jobId: 'pm-test', userUid: 'user-1', location: 'Medan', doneCount: 6, totalCount: 10 }],
+    [{
+      id: 'report-1',
+      jobId: 'pm-test',
+      submittedBy: 'user-1',
+      region: 'Medan',
+      pointsCount: 10,
+      status: 'pending_approval',
+    }]
+  );
+
+  assert.equal(job.doneCount, 10);
+  assert.equal(job.totalCount, 10);
+  assert.equal(job.progress, 100);
+  assert.equal(job.approvalStatus, 'pending_approval');
+  assert.equal(job.regionsDetail[0].percent, '100%');
+  assert.equal(job.regionsDetail[0].approvalStatus, 'pending_approval');
+});
+
+test('location progress reflects saved device progress before report submission', () => {
+  const [job] = applyJobProgress(
+    [createJob(['Medan'], ['user-1'])],
+    [{ jobId: 'pm-test', userUid: 'user-1', location: 'Medan', doneCount: 6, totalCount: 10 }]
+  );
+
+  assert.equal(job.doneCount, 6);
+  assert.equal(job.progress, 60);
+  assert.equal(job.regionsDetail[0].percent, '60%');
+});
+
+test('a report only marks the PM approved after an admin approval decision', () => {
+  const [pendingJob] = applyJobProgress(
+    [createJob(['Medan'], ['user-1'])],
+    [],
+    [{
+      id: 'report-1',
+      jobId: 'pm-test',
+      submittedBy: 'user-1',
+      region: 'Medan',
+      pointsCount: 10,
+      status: 'needs_revision',
+      revisionReason: 'Tambahkan foto label aset.',
+    }]
+  );
+  const [approvedJob] = applyJobProgress(
+    [createJob(['Medan'], ['user-1'])],
+    [],
+    [{
+      id: 'report-1',
+      jobId: 'pm-test',
+      submittedBy: 'user-1',
+      region: 'Medan',
+      pointsCount: 10,
+      status: 'approved',
+    }]
+  );
+
+  assert.equal(pendingJob.approvalStatus, 'needs_revision');
+  assert.equal(pendingJob.regionsDetail[0].approvalStatus, 'needs_revision');
+  assert.equal(approvedJob.approvalStatus, 'approved');
+  assert.equal(approvedJob.regionsDetail[0].approvalStatus, 'approved');
+});

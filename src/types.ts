@@ -29,7 +29,10 @@ export interface RegionDetail {
   name: string;
   percent: string;
   color: string;
+  approvalStatus?: 'pending_approval' | 'needs_revision' | 'approved';
 }
+
+export type PmApprovalStatus = 'pending_approval' | 'needs_revision' | 'approved';
 
 export interface RecentLog {
   name: string;
@@ -65,6 +68,7 @@ export interface PmItem {
   recentLog: RecentLog;
   modules?: PmModule[];
   fieldProgress?: Record<string, unknown>[];
+  approvalStatus?: PmApprovalStatus;
   createdBy?: string;
   portalId?: string;
   targetUserUids?: string[];

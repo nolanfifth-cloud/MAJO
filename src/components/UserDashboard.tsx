@@ -11,6 +11,7 @@ import {
   loadJobsForUserFromFirestore,
   saveCompletedReportToFirestore,
   saveJobProgressToFirestore,
+  subscribeToCompletedReportsForUserFromFirestore,
 } from '../services/firestoreStore';
 import {
   ListChecks,
@@ -293,9 +294,47 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   const [jobsLoadError, setJobsLoadError] = useState('');
   const [jobsReloadKey, setJobsReloadKey] = useState(0);
   const [submittedJobIds, setSubmittedJobIds] = useState<Set<string>>(new Set());
+  const [reviewReportByJobId, setReviewReportByJobId] = useState<Record<string, Record<string, unknown>>>({});
+  const reviewStatusSignatureRef = useRef('');
   const isJobProgressReadyRef = useRef(false);
   const progressSaveErrorRef = useRef<string | null>(null);
   const hasAssignedJobs = Object.keys(jobsDatabase).length > 0;
+
+  useEffect(() => {
+    if (!currentUser.uid || !currentUser.portalAddress) return;
+    return subscribeToCompletedReportsForUserFromFirestore(
+      currentUser.uid,
+      currentUser.portalAddress,
+      (reports) => {
+        const byJobId: Record<string, Record<string, unknown>> = {};
+        reports.forEach((report) => {
+          const jobId = String(report.jobId || '');
+          if (jobId) byJobId[jobId] = report;
+        });
+        const signature = Object.values(byJobId)
+          .map((report) => [
+            String(report.jobId || ''),
+            String(report.status || 'approved'),
+            String(report.revisionReason || ''),
+            String(report.reviewedAt || report.savedAt || ''),
+          ].join(':'))
+          .sort()
+          .join('|');
+        if (reviewStatusSignatureRef.current && reviewStatusSignatureRef.current !== signature) {
+          setJobsReloadKey((key) => key + 1);
+        }
+        reviewStatusSignatureRef.current = signature;
+        setReviewReportByJobId(byJobId);
+        setSubmittedJobIds(new Set(Object.values(byJobId)
+          .filter((report) => report.status !== 'needs_revision')
+          .map((report) => String(report.jobId || ''))
+          .filter(Boolean)));
+      },
+      (error) => {
+        triggerToast(`Status approval belum dapat disinkronkan: ${error.message}`, false);
+      }
+    );
+  }, [currentUser.uid, currentUser.portalAddress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -316,18 +355,30 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       const progressSnapshots = progressResult.status === 'fulfilled' ? progressResult.value : [];
       const completedReports = reportsResult.status === 'fulfilled' ? reportsResult.value : [];
       isJobProgressReadyRef.current = progressResult.status === 'fulfilled';
-      const submittedIds = new Set(completedReports.map((report) => String(report.jobId || '')).filter(Boolean));
+      const reportsByJobId: Record<string, Record<string, unknown>> = {};
+      completedReports.forEach((report) => {
+        const jobId = String(report.jobId || '');
+        if (jobId) reportsByJobId[jobId] = report;
+      });
+      const submittedIds = new Set(completedReports
+        .filter((report) => report.status !== 'needs_revision')
+        .map((report) => String(report.jobId || ''))
+        .filter(Boolean));
       try {
         const localReports = JSON.parse(localStorage.getItem('majo_completed_reports') || '[]') as Record<string, unknown>[];
         localReports
           .filter((report) => String(report.submittedBy || '') === userUid)
           .forEach((report) => {
             const jobId = String(report.jobId || '');
-            if (jobId) submittedIds.add(jobId);
+            if (jobId && !reportsByJobId[jobId]) {
+              reportsByJobId[jobId] = report;
+              if (report.status !== 'needs_revision') submittedIds.add(jobId);
+            }
           });
       } catch {
         // Ignore invalid local report cache.
       }
+      setReviewReportByJobId(reportsByJobId);
       setSubmittedJobIds(submittedIds);
       const progressByJobId = new Map(
         progressSnapshots.map((snapshot) => [String(snapshot.jobId || ''), snapshot])
@@ -694,10 +745,17 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     if (!jobToSubmit?.sourceId || !currentUser.uid || !currentUser.portalAddress) return;
 
     const submittedReport = {
-      id: `PM-${new Date().getFullYear()}-${Date.now()}`,
+      id: String(
+        reviewReportByJobId[jobToSubmit.sourceId]?.status === 'needs_revision'
+          ? reviewReportByJobId[jobToSubmit.sourceId].id || `PM-${new Date().getFullYear()}-${Date.now()}`
+          : `PM-${new Date().getFullYear()}-${Date.now()}`
+      ),
       jobId: jobToSubmit.sourceId,
       submittedBy: currentUser.uid,
+      technicianName: currentUser.name || currentUser.username,
       portalId: currentUser.portalAddress,
+      status: 'pending_approval',
+      revisionReason: '',
       year: new Date().getFullYear(),
       title: jobToSubmit.title,
       completedAt:
@@ -776,6 +834,10 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     }
 
     setSubmittedJobIds((previous) => new Set(previous).add(jobToSubmit.sourceId));
+    setReviewReportByJobId((previous) => ({
+      ...previous,
+      [jobToSubmit.sourceId]: submittedReport,
+    }));
     const remainingJobs = (Object.values(jobsDatabase) as JobTabItem[])
       .filter((job) => job.sourceId !== jobToSubmit.sourceId);
     const reindexedJobs = remainingJobs.reduce<Record<number, JobTabItem>>((result, job, index) => {
@@ -1540,6 +1602,31 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                     Pantau dan laporkan checklist inspeksi pemeliharaan rutin yang diberikan oleh Administrator.
                   </p>
                 </div>
+
+                {Object.values(reviewReportByJobId)
+                  .filter((report) => report.status === 'pending_approval' || report.status === 'needs_revision')
+                  .map((report) => (
+                    <div
+                      key={String(report.id || report.jobId)}
+                      className={`rounded-xl border p-4 text-sm ${
+                        report.status === 'needs_revision'
+                          ? 'border-rose-200 bg-rose-50 text-rose-900'
+                          : 'border-amber-200 bg-amber-50 text-amber-900'
+                      }`}
+                      role="status"
+                    >
+                      <p className="font-bold">
+                        {report.status === 'needs_revision' ? 'Laporan PM perlu direvisi' : 'Laporan PM menunggu approval admin'}
+                        {report.title ? ` · ${String(report.title)}` : ''}
+                      </p>
+                      {report.status === 'needs_revision' && (
+                        <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed">
+                          Alasan admin: {String(report.revisionReason || 'Admin meminta laporan diperiksa kembali.')}
+                          {' '}Perbarui respons yang diminta, lalu kirim kembali laporan.
+                        </p>
+                      )}
+                    </div>
+                  ))}
 
                 {isJobsLoading ? (
                   <div

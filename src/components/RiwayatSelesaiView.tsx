@@ -43,6 +43,8 @@ export interface CompletedPMItem {
   jobId?: string;
   portalId?: string;
   submittedBy?: string;
+  status?: 'pending_approval' | 'needs_revision' | 'approved';
+  revisionReason?: string;
   year: number;
   title: string;
   completedAt: string;
@@ -736,7 +738,9 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
   }, []);
 
   const allPmItems = useMemo(() => {
-    if (cloudReportsLoaded) return cloudReports;
+    if (cloudReportsLoaded) {
+      return cloudReports.filter((report) => !report.status || report.status === 'approved');
+    }
     try {
       const stored = localStorage.getItem('majo_completed_reports');
       if (stored) {
@@ -746,7 +750,7 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
             (!userUid || report.submittedBy === userUid)
             && (!portalId || report.portalId === portalId)
           );
-          return matchingLocalReports;
+          return matchingLocalReports.filter((report) => !report.status || report.status === 'approved');
         }
       }
       if (cloudReportsFailed && cloudReports.length > 0) return cloudReports;

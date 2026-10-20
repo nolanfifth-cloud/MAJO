@@ -464,6 +464,8 @@ export async function saveCompletedReportToFirestore(report: Record<string, unkn
     ...report,
     portalId: normalizedPortalId,
     submittedBy: userUid,
+    status: 'pending_approval',
+    revisionReason: '',
     savedAt: new Date().toISOString(),
   });
   const batch = writeBatch(firestore);
@@ -476,11 +478,32 @@ export async function saveCompletedReportToFirestore(report: Record<string, unkn
     doneCount: pointsCount,
     totalCount: pointsCount,
     progress: 100,
-    submitted: true,
+    submitted: false,
     completedReportId: reportId,
     updatedAt: new Date().toISOString(),
   }, { merge: true });
   await batch.commit();
+}
+
+export async function updateCompletedReportReviewInFirestore(
+  reportId: string,
+  portalId: string,
+  status: 'approved' | 'needs_revision',
+  revisionReason: string,
+  reviewerUid: string
+): Promise<void> {
+  if (!isFirebaseConfigured || !firestore || !reportId || !portalId || !reviewerUid) {
+    throw new Error('Data review laporan tidak lengkap.');
+  }
+  if (status === 'needs_revision' && !revisionReason.trim()) {
+    throw new Error('Alasan revisi wajib diisi.');
+  }
+  await updateDoc(doc(firestore, 'completedReports', reportId), {
+    status,
+    revisionReason: status === 'needs_revision' ? revisionReason.trim() : '',
+    reviewedBy: reviewerUid,
+    reviewedAt: new Date().toISOString(),
+  });
 }
 
 export async function loadCompletedReportsFromFirestore(userUid?: string, portalId?: string): Promise<Record<string, unknown>[]> {
@@ -509,6 +532,25 @@ export function subscribeToCompletedReportsFromFirestore(
   if (!isFirebaseConfigured || !firestore || !portalId) return () => undefined;
   const reportsQuery = query(
     collection(firestore, 'completedReports'),
+    where('portalId', '==', normalizePortalAddress(portalId))
+  );
+  return onSnapshot(
+    reportsQuery,
+    (snapshot) => onReports(snapshot.docs.map((item) => item.data())),
+    (error) => onError?.(error)
+  );
+}
+
+export function subscribeToCompletedReportsForUserFromFirestore(
+  userUid: string,
+  portalId: string,
+  onReports: (reports: Record<string, unknown>[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!isFirebaseConfigured || !firestore || !userUid || !portalId) return () => undefined;
+  const reportsQuery = query(
+    collection(firestore, 'completedReports'),
+    where('submittedBy', '==', userUid),
     where('portalId', '==', normalizePortalAddress(portalId))
   );
   return onSnapshot(
