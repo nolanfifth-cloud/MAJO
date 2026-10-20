@@ -47,6 +47,32 @@ test('a submitted report completes its location even when the cached recipient l
   assert.equal(job.totalCount, 10);
 });
 
+test('submitted report details expose selected places in admin field progress', () => {
+  const [job] = applyJobProgress(
+    [createJob(['Medan'], ['user-1'])],
+    [],
+    [{
+      jobId: 'pm-test',
+      submittedBy: 'user-1',
+      region: 'Medan',
+      pointsCount: 1,
+      subJobs: [{
+        id: 'device-1',
+        subtaskId: 'pm-test_subtask_1',
+        taskId: 'task-1',
+        pointId: 'point-1',
+        name: 'Periksa UPS',
+        device: 'Medan / Hub / Gedung A',
+        subLocation: 'Hub',
+        place: 'Gedung A',
+      }],
+    }]
+  );
+
+  assert.equal(job.fieldProgress?.[0].devices?.[0].place, 'Gedung A');
+  assert.equal(job.fieldProgress?.[0].devices?.[0].subLocation, 'Hub');
+});
+
 test('completion remains location-weighted when a PM targets multiple locations', () => {
   const [job] = applyJobProgress(
     [createJob(['Medan', 'Jakarta'], ['user-1', 'user-2'])],

@@ -5,7 +5,7 @@ import { CreateJobsView } from './CreateJobsView';
 import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
 import { downloadPmReportExcel } from '../services/excelExport';
-import { getPortalConfig } from '../services/workflowStore';
+import { buildTargetAreaDetails, getPortalConfig } from '../services/workflowStore';
 import { applyJobProgress } from '../services/jobProgress';
 import {
   loadCompletedReportsFromFirestore,
@@ -654,6 +654,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
         return matchingGroup ? matchingGroup.locations : [region];
       });
+      const targetAreaDetails = buildTargetAreaDetails(selectedRegions, portalConfig.masterGroups);
       const newPm: PmItem = {
         id: newId,
         code: newCode,
@@ -670,6 +671,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         subStationCount: 6,
         regions: editRegions.trim(),
         targetWilayahList,
+        targetAreaDetails,
         regionsDetail: editRegions.split(',').map((r) => ({
           name: `${r.trim()} (Aktif)`,
           percent: '0%',
@@ -712,6 +714,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
         return matchingGroup ? matchingGroup.locations : [region];
       });
+      const sameTargetLocations = targetWilayahList.length === (modalTargetPm.targetWilayahList || []).length
+        && targetWilayahList.every((location) => modalTargetPm.targetWilayahList?.includes(location));
+      const targetAreaDetails = sameTargetLocations && modalTargetPm.targetAreaDetails?.length
+        ? modalTargetPm.targetAreaDetails
+        : buildTargetAreaDetails(selectedRegions, portalConfig.masterGroups);
       const updatedPm: PmItem = {
         ...modalTargetPm,
         title: editTitle.trim(),
@@ -720,6 +727,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         dates: `${editStart} - ${editEnd}`,
         regions: editRegions.trim(),
         targetWilayahList,
+        targetAreaDetails,
         pic: editPic,
         modules: modulesToSave,
         totalCount: totalChecklistItems,
@@ -2033,11 +2041,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     const devices = Array.isArray(progress.devices)
                       ? progress.devices as Record<string, unknown>[]
                       : [];
-                    return devices.map((device) => ({
-                      ...device,
-                      location: String(device.location || progress.location || ''),
-                    } as Record<string, unknown>));
+                    return devices.map((device) => {
+                      const subLocation = String(device.subLocation || '');
+                      const place = String(device.place || '');
+                      return {
+                        ...device,
+                        location: subLocation && place
+                          ? [String(progress.location || ''), subLocation, place].filter(Boolean).join(' / ')
+                          : String(device.location || progress.location || ''),
+                      } as Record<string, unknown>;
+                    });
                   });
+                  const expectedSubtaskId = `${modalTargetPm.id}_subtask_${moduleIndex + 1}`;
 
                   return (
                     <section key={`${module.name}-${moduleIndex}`} className="space-y-3">
@@ -2053,7 +2068,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                       {checklistItems.map((item, itemIndex) => {
                         const itemResponses = responses.filter((response) =>
-                          String(response.taskTitle || '') === item.text
+                          String(response.subtaskId || '') === expectedSubtaskId
+                          && String(response.taskTitle || '') === item.text
                         );
                         return (
                           <article key={item.id || `${moduleIndex}-${itemIndex}`} className="rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest p-4">

@@ -24,12 +24,65 @@ export const applyJobProgress = (
         const pointsCount = Number(report.pointsCount || 0);
         const assignedChecklistCount = Number(job.totalCount || pointsCount);
         const previous = jobSnapshotsByUser.get(userUid) || {};
+        const devices = Array.isArray(previous.devices)
+          ? [...previous.devices as Record<string, unknown>[]]
+          : [];
+        const reportDevices = Array.isArray(report.subJobs)
+          ? report.subJobs as Record<string, unknown>[]
+          : [];
+        reportDevices.forEach((subJob, index) => {
+          const taskId = String(subJob.taskId || '');
+          const pointId = String(subJob.pointId || '');
+          const id = String(subJob.id || '');
+          const reportDevice = {
+            id: id || `${String(report.id || report.savedAt || 'report')}_${String(subJob.subtaskId || '')}_${taskId || index}`,
+            subtaskId: String(subJob.subtaskId || ''),
+            taskId,
+            pointId,
+            taskTitle: String(subJob.name || ''),
+            location: String(subJob.device || report.region || ''),
+            subLocation: String(subJob.subLocation || ''),
+            place: String(subJob.place || ''),
+            statusState: 'DONE',
+            formData: {
+              photo: String(subJob.photoUrl || ''),
+              photoName: String(subJob.file || ''),
+              status: String(subJob.status || ''),
+              conditionSelection: String(subJob.conditionSelection || ''),
+              conditionValue: subJob.conditionValue,
+              logicOutput: String(subJob.logicOutput || ''),
+              keterangan: String(subJob.desc || ''),
+              durasi: String(subJob.duration || ''),
+              capturedAt: String(subJob.time || ''),
+            },
+          };
+          const existingIndex = devices.findIndex((device) =>
+            (id && String(device.id || '') === id)
+            || (taskId && pointId
+              && String(device.taskId || '') === taskId
+              && String(device.pointId || '') === pointId)
+          );
+          if (existingIndex === -1) {
+            devices.push(reportDevice);
+          } else {
+            const existing = devices[existingIndex];
+            const existingFormData = existing.formData && typeof existing.formData === 'object'
+              ? existing.formData as Record<string, unknown>
+              : {};
+            devices[existingIndex] = {
+              ...existing,
+              ...reportDevice,
+              formData: { ...existingFormData, ...reportDevice.formData },
+            };
+          }
+        });
         jobSnapshotsByUser.set(userUid, {
           ...previous,
           userUid,
           location: String(report.region || previous.location || ''),
           updatedAt: String(report.savedAt || report.completedAt || previous.updatedAt || ''),
           submitted: true,
+          devices,
           doneCount: Math.max(Number(previous.doneCount || 0), assignedChecklistCount),
           totalCount: Math.max(Number(previous.totalCount || 0), assignedChecklistCount),
         });

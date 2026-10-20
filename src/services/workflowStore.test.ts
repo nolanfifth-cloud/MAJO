@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseLegacyAreaDetails } from './workflowStore';
+import { buildTargetAreaDetails, parseLegacyAreaDetails } from './workflowStore';
 
 test('legacy area parser returns an empty list for missing data', () => {
   assert.deepEqual(parseLegacyAreaDetails(), []);
@@ -27,4 +27,24 @@ test('legacy area parser keeps a location without hierarchy', () => {
   assert.deepEqual(parseLegacyAreaDetails('Surabaya'), [
     { location: 'Surabaya', subLocations: [] },
   ]);
+});
+
+test('target area details include configured sub-locations and places for selected groups', () => {
+  assert.deepEqual(
+    buildTargetAreaDetails(
+      ['Wilayah Sumatera'],
+      [{
+        id: 'sumatera',
+        name: 'Wilayah Sumatera',
+        locations: ['Medan'],
+        locationHierarchy: {
+          Medan: [{ id: 'hub', name: 'Hub', places: ['Gedung A', 'Gedung B'] }],
+        },
+      }]
+    ),
+    [{
+      location: 'Medan',
+      subLocations: [{ name: 'Hub', places: ['Gedung A', 'Gedung B'] }],
+    }]
+  );
 });

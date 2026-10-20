@@ -47,7 +47,9 @@ interface DeviceItem {
   id: string;
   subtaskId: string;
   subtaskTitle: string;
+  taskId: string;
   taskTitle: string;
+  pointId: string;
   pmType?: string;
   hasPhoto: boolean;
   hasCondition: boolean;
@@ -57,6 +59,8 @@ interface DeviceItem {
   hasTimestamp: boolean;
   hasNotes: boolean;
   location: string;
+  subLocation: string;
+  place: string;
   expanded: boolean;
   statusState: 'INITIAL' | 'DONE' | 'UPDATE';
   formData: {
@@ -98,6 +102,35 @@ const getSavedFormData = (value: unknown): Partial<DeviceItem['formData']> => {
   const { latitude: _latitude, longitude: _longitude, ...formData } = value as Record<string, unknown>;
   return formData as Partial<DeviceItem['formData']>;
 };
+
+const normalizePlaceName = (value: string) => value.trim().toLocaleLowerCase('id-ID');
+
+const matchConfiguredPlace = (
+  value: string,
+  areaDetails: NonNullable<PmItem['targetAreaDetails']>,
+  location: string
+): { subLocation: string; place: string } | null => {
+  const normalizedValue = normalizePlaceName(value);
+  if (!normalizedValue) return null;
+  const area = areaDetails.find((item) => normalizePlaceName(item.location) === normalizePlaceName(location));
+  for (const subLocation of area?.subLocations || []) {
+    for (const place of subLocation.places) {
+      const candidates = [
+        place,
+        `${subLocation.name} / ${place}`,
+        `${subLocation.name} - ${place}`,
+        `${location} / ${subLocation.name} / ${place}`,
+      ];
+      if (candidates.some((candidate) => normalizePlaceName(candidate) === normalizedValue)) {
+        return { subLocation: subLocation.name, place };
+      }
+    }
+  }
+  return null;
+};
+
+const getDeviceLocationLabel = (location: string, subLocation: string, place: string) =>
+  subLocation && place ? `${location} / ${subLocation} / ${place}` : '';
 interface UserDashboardProps {
   onNavigate: (view: AuthView) => void;
   onLogout?: () => void;
@@ -265,11 +298,24 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           : [];
         const savedDevicesById = new Map(savedDevices.map((device) => [String(device.id || ''), device]));
         const hasSavedDeviceSnapshot = Array.isArray(savedProgress?.devices);
+        const assignedLocation = currentUser.location || job.targetWilayahList?.[0] || '';
+        const areaDetails = job.targetAreaDetails || [];
         const configuredDevices: DeviceItem[] = (job.modules || []).flatMap((module, moduleIndex): DeviceItem[] => {
           const subtaskId = `${job.id}_subtask_${moduleIndex + 1}`;
           const checklistItems = module.checklist?.length
             ? module.checklist
             : Array.from({ length: Math.max(1, module.itemCount || 1) }, () => null);
+          const firstSavedBaseDevice = checklistItems
+            .map((_, itemIndex) => savedDevicesById.get(`${subtaskId}_point_${itemIndex + 1}`))
+            .find((device) => typeof device?.pointId === 'string' || Boolean(device?.location));
+          const firstSavedBaseLocation = typeof firstSavedBaseDevice?.location === 'string'
+            ? firstSavedBaseDevice.location
+            : '';
+          const defaultPointId = typeof firstSavedBaseDevice?.pointId === 'string'
+            ? firstSavedBaseDevice.pointId
+            : firstSavedBaseLocation
+              ? `${subtaskId}_legacy_${encodeURIComponent(normalizePlaceName(firstSavedBaseLocation))}`
+              : `${subtaskId}_point_1`;
           return checklistItems.map((checklist, itemIndex) => {
             const taskTitle = checklist?.text || module.name;
             const pmType = checklist?.pmType || module.pmType;
@@ -281,11 +327,26 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
             const id = `${subtaskId}_point_${itemIndex + 1}`;
             const savedDevice = savedDevicesById.get(id);
             const savedFormData = getSavedFormData(savedDevice?.formData);
+            const savedLocation = typeof savedDevice?.location === 'string' ? savedDevice.location : '';
+            const matchedPlace = matchConfiguredPlace(savedLocation, areaDetails, assignedLocation);
+            const subLocation = typeof savedDevice?.subLocation === 'string'
+              ? savedDevice.subLocation
+              : matchedPlace?.subLocation || '';
+            const place = typeof savedDevice?.place === 'string'
+              ? savedDevice.place
+              : matchedPlace?.place || '';
+            const pointId = typeof savedDevice?.pointId === 'string'
+              ? savedDevice.pointId
+              : savedLocation
+                ? `${subtaskId}_legacy_${encodeURIComponent(normalizePlaceName(savedLocation))}`
+                : defaultPointId;
             return {
               id,
               subtaskId,
               subtaskTitle: module.name,
+              taskId: `${subtaskId}_task_${itemIndex + 1}`,
               taskTitle,
+              pointId,
               pmType,
               hasPhoto: checklist?.hasPhoto ?? true,
               hasCondition: checklist?.hasCondition ?? true,
@@ -294,7 +355,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               conditionLogic: checklist?.conditionLogic || [],
               hasTimestamp: checklist?.hasTimestamp ?? false,
               hasNotes: checklist?.hasNotes ?? Boolean(checklist?.notesText),
-              location: currentUser.location || job.targetWilayahList?.[0] || job.regions,
+              location: getDeviceLocationLabel(assignedLocation, subLocation, place) || savedLocation,
+              subLocation,
+              place,
               expanded: savedDevice
                 ? savedDevice.expanded === true
                 : moduleIndex === 0 && itemIndex === 0,
@@ -314,18 +377,44 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           });
         });
         const configuredDeviceIds = new Set(configuredDevices.map((device) => device.id));
-        const subtaskTemplates = new Map(configuredDevices.map((device) => [device.subtaskId, device]));
+        const subtaskTemplates = new Map(
+          configuredDevices.map((device) => [`${device.subtaskId}:${device.taskTitle}`, device])
+        );
+        const firstTemplateBySubtask = new Map(
+          configuredDevices.map((device) => [device.subtaskId, device])
+        );
         const restoredAddedDevices: DeviceItem[] = savedDevices.flatMap((snapshot): DeviceItem[] => {
           const id = String(snapshot.id || '');
           const subtaskId = String(snapshot.subtaskId || '');
-          const template = subtaskTemplates.get(subtaskId);
+          const taskTitle = typeof snapshot.taskTitle === 'string' ? snapshot.taskTitle : '';
+          const taskId = typeof snapshot.taskId === 'string' ? snapshot.taskId : '';
+          const template = configuredDevices.find((device) =>
+            device.subtaskId === subtaskId && taskId && device.taskId === taskId
+          ) || subtaskTemplates.get(`${subtaskId}:${taskTitle}`)
+            || firstTemplateBySubtask.get(subtaskId);
           if (!id || configuredDeviceIds.has(id) || !template) return [];
           const savedFormData = getSavedFormData(snapshot.formData);
+          const savedLocation = typeof snapshot.location === 'string' ? snapshot.location : '';
+          const matchedPlace = matchConfiguredPlace(savedLocation, areaDetails, assignedLocation);
+          const subLocation = typeof snapshot.subLocation === 'string'
+            ? snapshot.subLocation
+            : matchedPlace?.subLocation || '';
+          const place = typeof snapshot.place === 'string'
+            ? snapshot.place
+            : matchedPlace?.place || '';
+          const pointId = typeof snapshot.pointId === 'string'
+            ? snapshot.pointId
+            : savedLocation
+              ? `${subtaskId}_legacy_${encodeURIComponent(normalizePlaceName(savedLocation))}`
+              : `${subtaskId}_legacy_${id}`;
           return [{
             ...template,
             id,
-            taskTitle: typeof snapshot.taskTitle === 'string' ? snapshot.taskTitle : template.taskTitle,
-            location: typeof snapshot.location === 'string' ? snapshot.location : '',
+            taskTitle: taskTitle || template.taskTitle,
+            pointId,
+            subLocation,
+            place,
+            location: getDeviceLocationLabel(assignedLocation, subLocation, place) || savedLocation,
             expanded: snapshot.expanded === true,
             statusState: snapshot.statusState === 'DONE' || snapshot.statusState === 'UPDATE'
               ? snapshot.statusState as DeviceItem['statusState']
@@ -334,8 +423,44 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           }];
         });
         const activeDevices = hasSavedDeviceSnapshot
-          ? configuredDevices.filter((device) => savedDevicesById.has(device.id))
+          ? configuredDevices.some((device) => savedDevicesById.has(device.id))
+            ? configuredDevices
+            : []
           : configuredDevices;
+        const restoredDevices = [...activeDevices, ...restoredAddedDevices];
+        const devicesByPoint = new Map<string, DeviceItem[]>();
+        restoredDevices.forEach((device) => {
+          devicesByPoint.set(device.pointId, [...(devicesByPoint.get(device.pointId) || []), device]);
+        });
+        const completePointDevices = [...devicesByPoint.values()].flatMap((pointDevices) => {
+          const firstDevice = pointDevices[0];
+          const templates = configuredDevices.filter((device) => device.subtaskId === firstDevice.subtaskId);
+          const taskIds = new Set(pointDevices.map((device) => device.taskId));
+          const missingTasks = templates
+            .filter((template) => !taskIds.has(template.taskId))
+            .map((template, taskIndex) => ({
+              ...template,
+              id: `${firstDevice.pointId}_${template.taskId}`,
+              pointId: firstDevice.pointId,
+              subLocation: firstDevice.subLocation,
+              place: firstDevice.place,
+              location: firstDevice.location,
+              expanded: false,
+              statusState: 'INITIAL' as const,
+              formData: {
+                photo: '',
+                photoName: '',
+                status: '',
+                conditionSelection: '',
+                conditionValue: undefined,
+                logicOutput: '',
+                keterangan: '',
+                durasi: '',
+                capturedAt: '',
+              },
+            }));
+          return [...pointDevices, ...missingTasks];
+        });
         result[index + 1] = {
           id: index + 1,
           sourceId: job.id,
@@ -344,7 +469,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
           dates: job.dates,
           regions: job.regions,
           targetAreaDetails: job.targetAreaDetails,
-          devices: [...activeDevices, ...restoredAddedDevices],
+          devices: completePointDevices,
         };
         return result;
       }, {});
@@ -542,9 +667,15 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       subJobsCount: new Set(jobToSubmit.devices.map((device) => device.subtaskId)).size,
       pointsCount: jobToSubmit.devices.length,
       subJobs: jobToSubmit.devices.map((device, index) => ({
+        id: device.id,
         name: device.taskTitle || jobToSubmit.title,
         tag: `${device.subtaskId}-${index + 1}`,
+        subtaskId: device.subtaskId,
+        taskId: device.taskId,
+        pointId: device.pointId,
         device: device.location || 'Perangkat Standar',
+        subLocation: device.subLocation,
+        place: device.place,
         duration: `${device.formData.durasi || '30'} Menit`,
         file: device.formData.photoName || 'foto_inspeksi.jpg',
         photoUrl: device.formData.photo.startsWith('https://') ? device.formData.photo : '',
@@ -619,6 +750,20 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   const activeSubtaskDevices = activeSubtask
     ? activeJob.devices.filter((device) => device.subtaskId === activeSubtask.subtaskId)
     : [];
+  const activeSubtaskPointGroups = [...new Map(
+    activeSubtaskDevices.map((device) => [device.pointId, activeSubtaskDevices.filter((item) => item.pointId === device.pointId)])
+  ).values()];
+  const assignedLocationArea = activeJob.targetAreaDetails?.find((area) =>
+    normalizePlaceName(area.location) === normalizePlaceName(currentUser.location || '')
+  );
+  const assignedSubLocations = assignedLocationArea?.subLocations || [];
+  const selectedPlaceCounts = new Map<string, number>();
+  activeSubtaskPointGroups.forEach((pointDevices) => {
+    const point = pointDevices[0];
+    if (!point.subLocation || !point.place) return;
+    const key = `${normalizePlaceName(point.subLocation)}::${normalizePlaceName(point.place)}`;
+    selectedPlaceCounts.set(key, (selectedPlaceCounts.get(key) || 0) + 1);
+  });
   const allAssignedJobs = Object.values(jobsDatabase) as JobTabItem[];
   const jobsPerPage = 5;
   const totalJobsPages = Math.max(1, Math.ceil(allAssignedJobs.length / jobsPerPage));
@@ -692,13 +837,17 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const addDeviceToActiveSubtask = () => {
     if (!activeSubtask) return;
-    const template = activeSubtaskDevices[0];
-    if (!template) return;
-    const newDevice: DeviceItem = {
+    const templates = [...new Map(activeSubtaskDevices.map((device) => [device.taskId, device])).values()];
+    if (templates.length === 0) return;
+    const pointId = `${activeSubtask.subtaskId}_point_${crypto.randomUUID()}`;
+    const newDevices = templates.map((template, index): DeviceItem => ({
       ...template,
-      id: `${activeSubtask.subtaskId}_point_${crypto.randomUUID()}`,
+      id: `${pointId}_${template.taskId}`,
+      pointId,
       location: '',
-      expanded: true,
+      subLocation: '',
+      place: '',
+      expanded: index === 0,
       statusState: 'INITIAL',
       formData: {
         photo: '',
@@ -711,13 +860,13 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         durasi: '',
         capturedAt: '',
       },
-    };
+    }));
     setJobsDatabase((previous) => {
       const job = previous[currentJobId];
       if (!job) return previous;
       return {
         ...previous,
-        [currentJobId]: { ...job, devices: [...job.devices, newDevice] },
+        [currentJobId]: { ...job, devices: [...job.devices, ...newDevices] },
       };
     });
   };
@@ -732,9 +881,11 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     if (!deleteTargetId) return;
     const targetDevice = activeJob.devices.find((device) => device.id === deleteTargetId);
     const pointsInSubtask = targetDevice
-      ? activeJob.devices.filter((device) => device.subtaskId === targetDevice.subtaskId)
-      : [];
-    if (pointsInSubtask.length <= 1) {
+      ? new Set(activeJob.devices
+          .filter((device) => device.subtaskId === targetDevice.subtaskId)
+          .map((device) => device.pointId)).size
+      : 0;
+    if (pointsInSubtask <= 1) {
       setDeleteTargetId(null);
       triggerToast('Setiap sub-tugas harus memiliki minimal satu titik perangkat.', false);
       return;
@@ -746,7 +897,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         ...prev,
         [currentJobId]: {
           ...job,
-          devices: job.devices.filter((d) => d.id !== deleteTargetId),
+          devices: job.devices.filter((device) => device.pointId !== targetDevice?.pointId),
         },
       };
     });
@@ -759,11 +910,23 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     const device = activeJob.devices.find((d) => d.id === deviceId);
     if (!device) return;
 
+    const hasDuplicatePlace = activeJob.devices.some((otherDevice) =>
+      otherDevice.subtaskId === device.subtaskId
+      && otherDevice.pointId !== device.pointId
+      && normalizePlaceName(otherDevice.subLocation) === normalizePlaceName(device.subLocation)
+      && normalizePlaceName(otherDevice.place) === normalizePlaceName(device.place)
+      && Boolean(device.subLocation && device.place)
+    );
+    if (hasDuplicatePlace) {
+      triggerToast('Tempat ini sudah dipilih untuk perangkat lain pada sub-tugas yang sama.', false);
+      return;
+    }
+
     const isNegative = isAbnormalStatus(device);
 
     if (device.statusState === 'INITIAL') {
-      if (!device.location.trim()) {
-        triggerToast('Mohon ketik Lokasi Perangkat terlebih dahulu!', false);
+      if (!device.subLocation || !device.place) {
+        triggerToast('Pilih sub-lokasi dan tempat perangkat terlebih dahulu.', false);
         return;
       }
       if (device.hasCondition && !hasRequiredConditionResponse(device)) {
@@ -803,6 +966,10 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       updateDevice(deviceId, { statusState: 'UPDATE' });
       triggerToast('Mode edit aktif. Perbaiki data lalu klik tombol Update.', true);
     } else if (device.statusState === 'UPDATE') {
+      if (!device.subLocation || !device.place) {
+        triggerToast('Pilih sub-lokasi dan tempat perangkat terlebih dahulu.', false);
+        return;
+      }
       if (device.hasCondition && !hasRequiredConditionResponse(device)) {
         triggerToast(device.conditionMode === 'both'
           ? 'Lengkapi Pilihan Kondisi dan nilai Logic Kondisi terlebih dahulu.'
@@ -848,6 +1015,24 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       return {
         ...prev,
         [currentJobId]: { ...job, devices: updatedDevices },
+      };
+    });
+  };
+
+  const updateDevicePoint = (pointId: string, subLocation: string, place: string) => {
+    const areaLocation = currentUser.location || '';
+    const location = getDeviceLocationLabel(areaLocation, subLocation, place);
+    setJobsDatabase((previous) => {
+      const job = previous[currentJobId];
+      if (!job) return previous;
+      return {
+        ...previous,
+        [currentJobId]: {
+          ...job,
+          devices: job.devices.map((device) => device.pointId === pointId
+            ? { ...device, subLocation, place, location }
+            : device),
+        },
       };
     });
   };
@@ -1408,7 +1593,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
 
                   {/* Form sub-tugas terpilih */}
                   <div className="space-y-5">
-                    {activeSubtaskDevices.length === 0 ? (
+                    {activeSubtaskPointGroups.length === 0 ? (
                       <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50">
                         <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                         <p className="text-sm font-semibold text-slate-600">
@@ -1419,20 +1604,128 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                         </p>
                       </div>
                     ) : (
-                      activeSubtaskDevices.map((device) => {
-                        const isExpanded = device.expanded;
-                        const isLocked = device.statusState === 'DONE';
-                        const isNegative = isAbnormalStatus(device);
-                        const conditionOptions = device.hasCondition
-                          ? getConditionOptions(device.pmType, device.conditionOptions)
-                          : [];
-                        const matchedLogicRange = device.conditionLogic.find((range) =>
-                          device.formData.conditionValue !== undefined
-                          && device.formData.conditionValue >= range.min
-                          && device.formData.conditionValue <= range.max
+                      activeSubtaskPointGroups.map((pointDevices, pointIndex) => {
+                        const pointDevice = pointDevices[0];
+                        const currentPlaceKey = `${normalizePlaceName(pointDevice.subLocation)}::${normalizePlaceName(pointDevice.place)}`;
+                        const duplicateCurrentPlace = (selectedPlaceCounts.get(currentPlaceKey) || 0) > 1;
+                        const isConfiguredCurrentPlace = assignedSubLocations.some((subLocation) =>
+                          subLocation.name === pointDevice.subLocation && subLocation.places.includes(pointDevice.place)
                         );
-
+                        const pointLocked = isConfiguredCurrentPlace && !duplicateCurrentPlace
+                          && pointDevices.some((device) => device.statusState === 'DONE');
+                        const hasAvailablePlaces = assignedSubLocations.some((subLocation) =>
+                          subLocation.places.some((place) =>
+                            !selectedPlaceCounts.has(`${normalizePlaceName(subLocation.name)}::${normalizePlaceName(place)}`)
+                          )
+                        );
+                        const isCurrentPlaceOccupied = (subLocation: string, place: string) => {
+                          const key = `${normalizePlaceName(subLocation)}::${normalizePlaceName(place)}`;
+                          const selectedByAnotherPoint = (selectedPlaceCounts.get(key) || 0)
+                            > (key === currentPlaceKey ? 1 : 0);
+                          return selectedByAnotherPoint;
+                        };
                         return (
+                          <section key={pointDevice.pointId} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                            <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-end">
+                              <div className="min-w-0 flex-1">
+                                <h4 className="text-sm font-bold text-slate-900">
+                                  Perangkat {pointIndex + 1} — {activeSubtask?.subtaskTitle}
+                                </h4>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  Semua Something To Do di bawah ini berlaku untuk perangkat pada tempat yang dipilih.
+                                </p>
+                              </div>
+                              <label className="flex min-w-44 flex-col gap-1 text-xs font-semibold text-slate-700">
+                                Sub-lokasi
+                                <select
+                                  value={pointDevice.subLocation}
+                                  disabled={pointLocked}
+                                  onChange={(event) => updateDevicePoint(pointDevice.pointId, event.target.value, '')}
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                                >
+                                  <option value="">Pilih sub-lokasi</option>
+                                  {assignedSubLocations.map((subLocation) => (
+                                    <option key={subLocation.name} value={subLocation.name}>{subLocation.name}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="flex min-w-44 flex-col gap-1 text-xs font-semibold text-slate-700">
+                                Tempat
+                                <select
+                                  value={pointDevice.place}
+                                  disabled={pointLocked || !pointDevice.subLocation}
+                                  onChange={(event) => updateDevicePoint(pointDevice.pointId, pointDevice.subLocation, event.target.value)}
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+                                >
+                                  <option value="">Pilih tempat</option>
+                                  {(assignedSubLocations.find((item) => item.name === pointDevice.subLocation)?.places || []).map((place) => (
+                                    <option
+                                      key={place}
+                                      value={place}
+                                      disabled={isCurrentPlaceOccupied(pointDevice.subLocation, place)}
+                                    >
+                                      {place}{isCurrentPlaceOccupied(pointDevice.subLocation, place) ? ' (sudah dipilih)' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={addDeviceToActiveSubtask}
+                                  disabled={!hasAvailablePlaces}
+                                  title="Tambah perangkat pada tempat lain"
+                                  aria-label="Tambah perangkat pada tempat lain"
+                                  className="flex h-9 items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Plus className="h-4 w-4" /> Tambah perangkat
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => promptDeleteDevice(pointDevice.id)}
+                                  title="Hapus perangkat dan seluruh checklist-nya"
+                                  aria-label="Hapus perangkat dan seluruh checklist-nya"
+                                  className="flex h-9 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="h-4 w-4" /> Hapus
+                                </button>
+                              </div>
+                            </div>
+                            {assignedSubLocations.length === 0 && (
+                              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                                Pilihan sub-lokasi dan tempat belum dikonfigurasi untuk wilayah ini. Hubungi admin portal.
+                              </p>
+                            )}
+                            {pointDevice.location && !isConfiguredCurrentPlace && (
+                              <p className="rounded-lg bg-blue-50 p-3 text-xs text-blue-800">
+                                Lokasi “{pointDevice.location}” belum cocok dengan pilihan master. Pilih ulang sub-lokasi dan tempat.
+                              </p>
+                            )}
+                            {duplicateCurrentPlace && (
+                              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                                Tempat ini sudah dipakai perangkat lain pada sub-tugas yang sama. Pilih tempat berbeda.
+                              </p>
+                            )}
+                            {assignedSubLocations.length > 0 && !assignedSubLocations.some((subLocation) => subLocation.places.length > 0) && (
+                              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                                Daftar tempat belum tersedia pada sub-lokasi wilayah ini. Admin perlu melengkapi pilihan Tempat.
+                              </p>
+                            )}
+                            <div className="space-y-3">
+                              {pointDevices.map((device) => {
+                                const isExpanded = device.expanded;
+                                const isLocked = device.statusState === 'DONE';
+                                const isNegative = isAbnormalStatus(device);
+                                const conditionOptions = device.hasCondition
+                                  ? getConditionOptions(device.pmType, device.conditionOptions)
+                                  : [];
+                                const matchedLogicRange = device.conditionLogic.find((range) =>
+                                  device.formData.conditionValue !== undefined
+                                  && device.formData.conditionValue >= range.min
+                                  && device.formData.conditionValue <= range.max
+                                );
+
+                                return (
                           <div
                             key={device.id}
                             className={`border rounded-2xl p-4 md:p-5 transition-all duration-300 ${
@@ -1444,7 +1737,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                             <div className="mb-3 flex items-start justify-between gap-3">
                               <div>
                                 <h4 className="text-sm font-bold text-slate-900">{device.taskTitle}</h4>
-                                <p className="text-[11px] text-slate-500">Titik Perangkat {activeSubtaskDevices.indexOf(device) + 1}</p>
+                                <p className="text-[11px] text-slate-500">Something To Do pada Perangkat {pointIndex + 1}</p>
                               </div>
                               {device.hasTimestamp && (
                                 <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">
@@ -1452,37 +1745,13 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                 </span>
                               )}
                             </div>
-                            {/* Baris Utama Header Perangkat: Lokasi Perangkat, Tanda Tambah (+), Tanda Panah Segitiga (▼/▲), Tanda Sampah (Hapus) */}
+                            {/* Checklist responses share the selected physical device above. */}
                             <div
                               className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                                 isExpanded ? 'pb-3 border-b border-slate-200' : ''
                               }`}
                             >
-                              {/* Lokasi Perangkat Input & Label Sejajar dengan Titik Dua (:) */}
-                              <div className="flex-1 flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-700 whitespace-nowrap min-w-[130px] flex justify-between items-center">
-                                  <span>Lokasi Perangkat</span>
-                                  <span className="font-black text-slate-400 mr-2">:</span>
-                                </span>
-                                <div className="flex-1 relative">
-                                  <input
-                                    type="text"
-                                    value={device.location}
-                                    disabled={isLocked}
-                                    onChange={(e) => updateDevice(device.id, { location: e.target.value })}
-                                    className={`w-full text-xs font-semibold rounded-xl px-3 py-2 outline-none transition-all ${
-                                      isLocked
-                                        ? 'text-slate-800 bg-slate-100 border border-slate-200 cursor-not-allowed'
-                                        : 'text-slate-900 bg-white border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
-                                    }`}
-                                    placeholder="Ketik nama atau kode lokasi perangkat..."
-                                  />
-                                </div>
-                              </div>
-
-                              {/* Tombol Toolbar Aksi Cepat: Tambah (+), Panah Segitiga (▼/▲), Hapus (Sampah) */}
                               <div className="flex items-center justify-end gap-1.5 shrink-0">
-                                {/* Tanda Panah Segitiga Toggle Expand/Collapse */}
                                 <button
                                   type="button"
                                   onClick={() => toggleDeviceExpand(device.id)}
@@ -1494,26 +1763,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                                   ) : (
                                     <ChevronDown className="w-4 h-4 text-slate-500" />
                                   )}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={addDeviceToActiveSubtask}
-                                  title="Tambah titik perangkat"
-                                  aria-label="Tambah titik perangkat"
-                                  className="w-8 h-8 rounded-lg bg-white border border-emerald-200 hover:bg-emerald-50 text-emerald-700 flex items-center justify-center transition-colors shadow-xs cursor-pointer"
-                                >
-                                  <Plus className="w-4 h-4" />
-                                </button>
-
-                                {/* Tanda Sampah (Hapus) */}
-                                <button
-                                  type="button"
-                                  onClick={() => promptDeleteDevice(device.id)}
-                                  title="Hapus Data Perangkat Ini"
-                                  className="w-8 h-8 rounded-lg bg-white border border-rose-200 hover:bg-rose-50 text-rose-600 flex items-center justify-center text-xs transition-colors shadow-xs cursor-pointer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
@@ -1791,6 +2040,10 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                               </div>
                             )}
                           </div>
+                                );
+                              })}
+                            </div>
+                          </section>
                         );
                       })
                     )}
@@ -1808,7 +2061,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
                             Semua Checklist Telah Selesai 100%!
                           </h4>
                           <p className="text-xs text-slate-600 mt-0.5">
-                            Seluruh {totalDevicesCount} titik perangkat telah diperiksa dan didokumentasikan. Laporan siap dikirim ke Administrator Wilayah.
+                            Seluruh {totalDevicesCount} checklist Something To Do telah diperiksa dan didokumentasikan. Laporan siap dikirim ke Administrator Wilayah.
                           </p>
                         </div>
                       </div>
@@ -1959,7 +2212,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               <h4 className="text-base font-extrabold text-slate-900">Konfirmasi Hapus Data Perangkat</h4>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Apakah Anda yakin ingin menghapus data perangkat ini? Seluruh data form yang sudah dimasukkan akan dibersihkan dari laporan.
+              Apakah Anda yakin ingin menghapus perangkat ini beserta seluruh Something To Do dan data form di tempat tersebut?
             </p>
             <div className="flex items-center justify-end gap-3 pt-2">
               <button

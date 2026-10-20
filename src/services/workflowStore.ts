@@ -193,6 +193,32 @@ export interface PortalMasterConfig {
   masterGroups: RegionConfig[];
 }
 
+export function buildTargetAreaDetails(
+  selectedRegions: string[],
+  masterGroups: RegionConfig[]
+): NonNullable<PmItem['targetAreaDetails']> {
+  const areas = new Map<string, NonNullable<PmItem['targetAreaDetails']>[number]>();
+  selectedRegions.forEach((selectedRegion) => {
+    const group = masterGroups.find((item) => item.name.toLowerCase() === selectedRegion.toLowerCase());
+    const locations = group?.locations || [selectedRegion];
+    locations.forEach((location) => {
+      const locationGroup = group || masterGroups.find((item) => item.locations.includes(location));
+      const subLocations = locationGroup?.locationHierarchy?.[location] || [];
+      const key = location.toLowerCase();
+      if (!areas.has(key)) {
+        areas.set(key, {
+          location,
+          subLocations: subLocations.map((subLocation) => ({
+            name: subLocation.name,
+            places: [...(subLocation.places || [])],
+          })),
+        });
+      }
+    });
+  });
+  return [...areas.values()];
+}
+
 const DEFAULT_PORTAL_ADDRESS = 'pt-majo-logistik-indo.majo.id';
 const DEFAULT_PORTAL_LINK = 'pt-majo-logistik-indo.majo.id';
 

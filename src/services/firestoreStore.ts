@@ -13,7 +13,12 @@ import {
 } from 'firebase/firestore';
 import { PmItem, RegisteredAccount, RegionConfig } from '../types';
 import { firebaseAuth, firebaseProjectId, firestore, isFirebaseConfigured } from './firebase';
-import { PortalMasterConfig, getActivePortalAddress, normalizePortalAddress } from './workflowStore';
+import {
+  buildTargetAreaDetails,
+  PortalMasterConfig,
+  getActivePortalAddress,
+  normalizePortalAddress,
+} from './workflowStore';
 
 const portalDocId = (portalAddress?: string): string => {
   const target = normalizePortalAddress(portalAddress || getActivePortalAddress() || 'portal');
@@ -112,6 +117,7 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
       !location ? 'location' : '',
     ].filter(Boolean).join(' dan ')}.`);
   }
+  const portalConfig = await loadPortalConfigFromFirestore(portalId);
 
   let assignmentsSnapshot;
   try {
@@ -149,7 +155,14 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
       ) {
         throw new Error('portal atau lokasi pada PM tidak lagi cocok dengan penugasannya');
       }
-      return { ...job, id: jobSnapshot.id, portalId };
+      return {
+        ...job,
+        id: jobSnapshot.id,
+        portalId,
+        targetAreaDetails: job.targetAreaDetails?.length
+          ? job.targetAreaDetails
+          : buildTargetAreaDetails(job.targetWilayahList || [], portalConfig?.masterGroups || []),
+      };
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error
         ? String(error.code)
