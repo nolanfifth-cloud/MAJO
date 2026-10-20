@@ -36,11 +36,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [portalAddress, setPortalAddress] = useState(
-    role === 'admin'
-      ? ''
-      : portalConfig.portalLink
-  );
+  const [portalAddress, setPortalAddress] = useState('');
   const [adminInviteCode, setAdminInviteCode] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<string>(
     portalConfig.masterWilayah[0] || 'Medan - Hub Operasional'
@@ -105,7 +101,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
     if (newRole === 'admin') {
       setPortalAddress('');
     } else {
-      setPortalAddress(portalConfig.portalLink || 'portal.majo.id/org/pt-majo-logistik-indo');
+      setPortalAddress('');
     }
   };
 
@@ -583,7 +579,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     placeholder={
                       role === 'admin'
                         ? 'nama-perusahaan'
-                        : 'portal.majo.id/org/pt-majo-logistik-indo'
+                        : 'Masukkan link portal'
                     }
                     required
                     className={`w-full pl-11 ${role === 'admin' ? 'pr-24' : 'pr-4'} py-2.5 bg-[#f8fafc] border rounded-full text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all shadow-2xs ${
