@@ -65,12 +65,20 @@ test('submitted report details expose selected places in admin field progress', 
         device: 'Medan / Hub / Gedung A',
         subLocation: 'Hub',
         place: 'Gedung A',
+        photos: [{
+          name: 'ups.jpg',
+          photoUrl: 'https://images.example/ups.jpg',
+          caption: 'Label UPS terlihat jelas',
+        }],
       }],
     }]
   );
 
   assert.equal(job.fieldProgress?.[0].devices?.[0].place, 'Gedung A');
   assert.equal(job.fieldProgress?.[0].devices?.[0].subLocation, 'Hub');
+  const formData = job.fieldProgress?.[0].devices?.[0].formData as Record<string, unknown>;
+  const photos = formData.photos as Record<string, unknown>[];
+  assert.equal(photos[0].caption, 'Label UPS terlihat jelas');
 });
 
 test('completion remains location-weighted when a PM targets multiple locations', () => {

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AuthView, RegisteredAccount } from '../types';
 import { firebaseConfigurationError, isFirebaseConfigured, loginWithFirebase } from '../services/firebase';
+import { normalizePortalAddress } from '../services/workflowStore';
 
 const LOGO_URL = '/assets/majo-logo.png';
 
@@ -26,6 +27,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 }) => {
   const [username, setUsername] = useState(prefilledUsername);
   const [password, setPassword] = useState('');
+  const [portalSlug, setPortalSlug] = useState('pt-majo-logistik-indo');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loginSuccessUser, setLoginSuccessUser] = useState<string | null>(null);
@@ -54,7 +56,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
     try {
       let foundAccount: RegisteredAccount | undefined;
 
-      foundAccount = await loginWithFirebase(username, password);
+      const normalizedPortalSlug = portalSlug.trim().toLowerCase().replace(/(?:\.majo\.id)+$/i, '');
+      const portalAddress = normalizedPortalSlug
+        ? normalizePortalAddress(`${normalizedPortalSlug}.majo.id`)
+        : '';
+      foundAccount = await loginWithFirebase(username, password, portalAddress);
 
       if (!foundAccount) {
         setErrorMessage('Username/email atau kata sandi tidak sesuai.');
@@ -295,7 +301,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     className="text-[11px] font-bold text-secondary uppercase tracking-wider px-1"
                     htmlFor="usernameInput"
                   >
-                    <b>{isFirebaseConfigured ? 'Username atau Email Admin' : 'Username atau Email'}</b>
+                    <b>Username atau Email</b>
                   </label>
                   <div className="relative flex items-center w-full group">
                     <div className="absolute left-4 flex items-center justify-center pointer-events-none text-secondary group-focus-within:text-primary transition-colors">
@@ -306,7 +312,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       className="w-full h-14 pl-12 pr-4 bg-surface-container-low text-on-surface text-sm placeholder:text-outline rounded-full outline-none transition-all duration-200 focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary/20 shadow-sm"
                       id="usernameInput"
                       name="username"
-                      placeholder={isFirebaseConfigured ? 'Masukkan username atau email admin' : 'Username atau email admin'}
+                      placeholder="Masukkan username atau email"
                       required
                       type="text"
                       value={username}
@@ -349,6 +355,37 @@ export const LoginView: React.FC<LoginViewProps> = ({
                         {showPassword ? 'visibility_off' : 'visibility'}
                       </span>
                     </button>
+                  </div>
+
+                  <div className="mt-5 flex flex-col gap-1.5">
+                    <label
+                      className="text-[11px] font-bold text-secondary uppercase tracking-wider px-1"
+                      htmlFor="portalAddressInput"
+                    >
+                      <b>Alamat Portal</b>
+                      <span className="ml-1 normal-case font-medium tracking-normal">(khusus user, opsional untuk admin)</span>
+                    </label>
+                    <div className="relative flex items-center w-full group">
+                      <div className="absolute left-4 flex items-center justify-center pointer-events-none text-secondary group-focus-within:text-primary transition-colors">
+                        <span className="material-symbols-outlined text-[20px]">language</span>
+                      </div>
+                      <input
+                        autoComplete="url"
+                        className="w-full h-14 pl-12 pr-28 bg-surface-container-low text-on-surface text-sm placeholder:text-outline rounded-full outline-none transition-all duration-200 focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary/20 shadow-sm"
+                        id="portalAddressInput"
+                        name="portalAddress"
+                        placeholder="nama-portal"
+                        type="text"
+                        value={portalSlug}
+                        onChange={(event) => setPortalSlug(event.target.value)}
+                      />
+                      <span aria-hidden="true" className="absolute right-4 text-sm text-secondary pointer-events-none">
+                        .majo.id
+                      </span>
+                    </div>
+                    <p className="px-1 text-[11px] text-secondary">
+                      Masukkan nama portal terdaftar. Akhiran .majo.id sudah disediakan.
+                    </p>
                   </div>
 
                   {/* Forgot Password Link */}

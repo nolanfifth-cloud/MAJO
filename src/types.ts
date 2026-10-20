@@ -88,6 +88,8 @@ export interface ChecklistItem {
   text: string;
   pmType?: string;
   hasPhoto: boolean;
+  photoLimit?: number;
+  photoCaptionRequired?: boolean;
   hasCondition?: boolean;
   conditionMode?: 'options' | 'logic' | 'both';
   conditionOptions?: string[];

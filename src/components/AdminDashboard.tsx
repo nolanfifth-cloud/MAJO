@@ -42,6 +42,8 @@ interface EditablePmModule {
   checklist: EditableChecklistItem[];
   newItemText: string;
   hasPhoto: boolean;
+  photoLimit: number;
+  photoCaptionRequired: boolean;
   hasCondition: boolean;
   conditionOptionsInput: string;
   hasTimestamp: boolean;
@@ -58,6 +60,8 @@ const createEditablePmModule = (name = '', checklist: EditableChecklistItem[] = 
   checklist,
   newItemText: '',
   hasPhoto: false,
+  photoLimit: 1,
+  photoCaptionRequired: false,
   hasCondition: false,
   conditionOptionsInput: '',
   hasTimestamp: false,
@@ -372,6 +376,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showNotificationMenu, setShowNotificationMenu] = useState(false);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>(() => {
     try {
       const key = `majo_read_notifications_${currentUser?.uid || currentUser?.username || 'admin'}`;
@@ -431,6 +437,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [showNotificationMenu]);
+
+  useEffect(() => {
+    if (!showProfileMenu) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !profileMenuRef.current?.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowProfileMenu(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showProfileMenu]);
+
+  useEffect(() => {
+    setShowProfileMenu(false);
+    setShowNotificationMenu(false);
+  }, [activeNav]);
 
   const openProgressNotification = (notificationId: string, jobId: string) => {
     setReadNotificationIds((previous) => previous.includes(notificationId) ? previous : [...previous, notificationId]);
@@ -588,6 +617,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       id: `item-${crypto.randomUUID()}`,
       text,
       hasPhoto: module.hasPhoto,
+      photoLimit: module.hasPhoto ? Math.max(1, Math.floor(module.photoLimit || 1)) : 0,
+      photoCaptionRequired: module.hasPhoto && module.photoCaptionRequired,
       hasCondition: module.hasCondition,
       conditionOptions: module.hasCondition ? conditionOptions : [],
       conditionText: module.hasCondition
@@ -970,7 +1001,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 aria-label={`Notifikasi${unreadNotificationCount > 0 ? `, ${unreadNotificationCount} belum dibaca` : ''}`}
                 className="relative p-2 rounded-full hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer"
                 type="button"
-                onClick={() => setShowNotificationMenu(!showNotificationMenu)}
+                onClick={() => {
+                  setShowProfileMenu(false);
+                  setShowNotificationMenu((open) => !open);
+                }}
               >
                 <span className="material-symbols-outlined text-[22px]">notifications</span>
                 {unreadNotificationCount > 0 && (
@@ -1039,10 +1073,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* User Profile Info with Dropdown / Logout */}
-            <div className="relative">
+            <div className="relative" ref={profileMenuRef}>
               <button
                 type="button"
-                onClick={() => setShowProfileMenu(!showProfileMenu)}
+                aria-expanded={showProfileMenu}
+                onClick={() => {
+                  setShowNotificationMenu(false);
+                  setShowProfileMenu((open) => !open);
+                }}
                 className="flex items-center gap-3 pl-2 border-l border-outline-variant/30 hover:opacity-80 transition-opacity cursor-pointer text-left"
               >
                 <div className="hidden sm:flex flex-col text-right">
@@ -1078,7 +1116,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onLogout?.()}
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      setShowLogoutConfirm(true);
+                    }}
                     className="w-full text-left px-3 py-2 text-xs text-error hover:bg-error-container/20 rounded-lg flex items-center gap-2 cursor-pointer border-t border-outline-variant/20 mt-1"
                   >
                     <span className="material-symbols-outlined text-[16px]">logout</span>
@@ -2077,9 +2118,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <div>
                                 <p className="font-label-md text-on-surface font-semibold">{itemIndex + 1}. {item.text}</p>
                                 <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
-                                  {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-0.5">Foto</span>}
+                                  {item.hasPhoto && (
+                                    <span className="rounded-full bg-surface-container px-2 py-0.5">
+                                      Foto wajib · maks. {item.photoLimit || 1}
+                                      {item.photoCaptionRequired ? ' · caption wajib' : ''}
+                                    </span>
+                                  )}
                                   {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-0.5">{item.conditionText || 'Kondisi'}</span>}
-                                  {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Tanggal &amp; Waktu</span>}
+                                  {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Hari, Tanggal &amp; Jam</span>}
                                   {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-0.5">Keterangan</span>}
                                 </div>
                               </div>
@@ -2104,7 +2150,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       {formData.keterangan && <p className="mt-1">Keterangan: {String(formData.keterangan)}</p>}
                                       {formData.durasi && <p className="mt-1">Durasi: {String(formData.durasi)} menit</p>}
                                       {formData.photoName && <p className="mt-1">Foto: {String(formData.photoName)}</p>}
-                                      {formData.capturedAt && <p className="mt-1">Waktu: {new Date(String(formData.capturedAt)).toLocaleString('id-ID')}</p>}
+                                      {Array.isArray(formData.photos) && formData.photos.map((photo, photoIndex) => {
+                                        const photoRecord = photo && typeof photo === 'object'
+                                          ? photo as Record<string, unknown>
+                                          : {};
+                                        return photoRecord.caption ? (
+                                          <p key={`${String(photoRecord.name || photoIndex)}-${photoIndex}`} className="mt-1">
+                                            Caption Foto {photoIndex + 1}: {String(photoRecord.caption)}
+                                          </p>
+                                        ) : null;
+                                      })}
+                                      {formData.capturedAt && <p className="mt-1">Hari, tanggal &amp; jam: {new Date(String(formData.capturedAt)).toLocaleString('id-ID', {
+                                        weekday: 'long',
+                                        day: '2-digit',
+                                        month: 'long',
+                                        year: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      })}</p>}
                                     </div>
                                   );
                                 })}
@@ -2256,9 +2319,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <div className="min-w-0 flex-1">
                                     <p className="font-label-md text-label-md font-semibold text-on-surface">{item.text}</p>
                                     <div className="mt-2 flex flex-wrap gap-1.5">
-                                      {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Foto wajib</span>}
+                                      {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Foto wajib · maks. {item.photoLimit || 1}</span>}
                                       {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-1 text-[10px] font-medium text-on-secondary-fixed">Kondisi: {conditionSummary}</span>}
-                                      {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Tanggal &amp; Waktu</span>}
+                                      {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-1 text-[10px] font-medium text-secondary">Hari, Tanggal &amp; Jam</span>}
                                       {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-1 text-[10px] font-medium text-on-tertiary-fixed">Keterangan petugas</span>}
                                     </div>
                                   </div>
@@ -2483,13 +2546,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </label>
                                   <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
                                     <input type="checkbox" checked={item.hasTimestamp} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasTimestamp: event.target.checked })} />
-                                    Tanggal &amp; Waktu
+                                    Hari, Tanggal &amp; Jam
                                   </label>
                                   <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
                                     <input type="checkbox" checked={item.hasNotes ?? false} onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, { hasNotes: event.target.checked })} />
                                     Keterangan petugas
                                   </label>
                                 </div>
+                                {item.hasPhoto && (
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    <label className="flex flex-col gap-1 text-xs font-medium text-on-surface">
+                                      Batas foto
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        value={item.photoLimit || 1}
+                                        onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, {
+                                          photoLimit: Math.max(1, Math.floor(Number(event.target.value) || 1)),
+                                        })}
+                                        className="rounded-md border border-outline-variant/30 bg-white px-3 py-2"
+                                      />
+                                    </label>
+                                    <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(item.photoCaptionRequired)}
+                                        onChange={(event) => handleUpdateEditChecklistItem(module.id, item.id, {
+                                          photoCaptionRequired: event.target.checked,
+                                        })}
+                                      />
+                                      Caption wajib per foto
+                                    </label>
+                                  </div>
+                                )}
                                 {item.hasCondition && (
                                   <input
                                     aria-label={`Opsi kondisi ${moduleIndex + 1}.${itemIndex + 1}`}
@@ -2544,12 +2634,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <input type="checkbox" checked={module.hasCondition} onChange={(event) => handleUpdateEditModule(module.id, { hasCondition: event.target.checked })} /> Pilihan kondisi
                             </label>
                             <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
-                              <input type="checkbox" checked={module.hasTimestamp} onChange={(event) => handleUpdateEditModule(module.id, { hasTimestamp: event.target.checked })} /> Tanggal &amp; Waktu
+                              <input type="checkbox" checked={module.hasTimestamp} onChange={(event) => handleUpdateEditModule(module.id, { hasTimestamp: event.target.checked })} /> Hari, Tanggal &amp; Jam
                             </label>
                             <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
                               <input type="checkbox" checked={module.hasNotes} onChange={(event) => handleUpdateEditModule(module.id, { hasNotes: event.target.checked })} /> Keterangan petugas
                             </label>
                           </div>
+                          {module.hasPhoto && (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <label className="flex flex-col gap-1 text-xs font-medium text-on-surface">
+                                Batas foto untuk item baru
+                                <input
+                                  type="number"
+                                  min={1}
+                                  step={1}
+                                  value={module.photoLimit}
+                                  onChange={(event) => handleUpdateEditModule(module.id, {
+                                    photoLimit: Math.max(1, Math.floor(Number(event.target.value) || 1)),
+                                  })}
+                                  className="rounded-md border border-outline-variant/30 bg-white px-3 py-2"
+                                />
+                              </label>
+                              <label className="flex items-center gap-2 text-xs font-medium text-on-surface">
+                                <input
+                                  type="checkbox"
+                                  checked={module.photoCaptionRequired}
+                                  onChange={(event) => handleUpdateEditModule(module.id, {
+                                    photoCaptionRequired: event.target.checked,
+                                  })}
+                                />
+                                Caption wajib per foto untuk item baru
+                              </label>
+                            </div>
+                          )}
                           {module.hasCondition && (
                             <input
                               aria-label={`Opsi kondisi default Sub-Tugas ${moduleIndex + 1}`}
@@ -2819,7 +2936,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   setIsProfileModalOpen(false);
-                  onLogout?.();
+                  setShowLogoutConfirm(true);
                 }}
                 className="px-4 py-2 rounded-DEFAULT bg-error-container text-error text-xs font-semibold hover:bg-error hover:text-white transition-colors cursor-pointer flex items-center gap-1"
               >
@@ -2835,6 +2952,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 animate-in fade-in">
+          <section
+            aria-labelledby="admin-logout-title"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-2xl border border-outline-variant/30 bg-surface-container-lowest p-6 shadow-2xl"
+            role="dialog"
+          >
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-error/15 bg-error-container/40 text-error">
+              <span aria-hidden="true" className="material-symbols-outlined text-[24px]">logout</span>
+            </div>
+            <h3 id="admin-logout-title" className="text-center text-base font-bold text-on-surface">
+              Konfirmasi Keluar Dashboard
+            </h3>
+            <p className="mt-1.5 text-center text-xs leading-relaxed text-secondary">
+              Apakah Anda yakin ingin mengakhiri sesi administrator MAJO?
+            </p>
+            <div className="mt-6 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirm(false)}
+                className="flex-1 rounded-xl border border-outline-variant px-4 py-2.5 text-xs font-bold text-on-surface hover:bg-surface-container-low"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLogoutConfirm(false);
+                  onLogout?.();
+                }}
+                className="flex-1 rounded-xl bg-error px-4 py-2.5 text-xs font-bold text-on-error hover:opacity-90"
+              >
+                Ya, Keluar
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

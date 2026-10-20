@@ -47,6 +47,19 @@ export const applyJobProgress = (
             formData: {
               photo: String(subJob.photoUrl || ''),
               photoName: String(subJob.file || ''),
+              photos: Array.isArray(subJob.photos)
+                ? (subJob.photos as Record<string, unknown>[]).map((photo) => ({
+                    url: String(photo.photoUrl || photo.url || ''),
+                    name: String(photo.name || photo.file || ''),
+                    caption: String(photo.caption || ''),
+                  }))
+                : subJob.photoUrl
+                  ? [{
+                      url: String(subJob.photoUrl),
+                      name: String(subJob.file || ''),
+                      caption: String(subJob.caption || ''),
+                    }]
+                  : [],
               status: String(subJob.status || ''),
               conditionSelection: String(subJob.conditionSelection || ''),
               conditionValue: subJob.conditionValue,

@@ -312,7 +312,11 @@ export async function registerAccountWithFirebase(
 
 export const registerAdminWithFirebase = registerAccountWithFirebase;
 
-export async function loginWithFirebase(credential: string, password: string): Promise<RegisteredAccount> {
+export async function loginWithFirebase(
+  credential: string,
+  password: string,
+  portalAddress?: string
+): Promise<RegisteredAccount> {
   if (!firebaseAuth || !firestore) throw new Error('Firebase belum dikonfigurasi.');
   const normalizedCredential = credential.trim().toLowerCase();
   let email = normalizedCredential;
@@ -331,14 +335,25 @@ export async function loginWithFirebase(credential: string, password: string): P
   const result: UserCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
   const profileSnapshot = await getDoc(doc(firestore, 'users', result.user.uid));
   const profile = profileSnapshot.exists() ? profileSnapshot.data() : {};
+  const role = (profile.role as 'admin' | 'user') || 'admin';
+  const accountPortalAddress = normalizePortalAddress((profile.portalAddress as string) || '');
+  const requestedPortalAddress = normalizePortalAddress(portalAddress || '');
+  if (role === 'user' && (!requestedPortalAddress || requestedPortalAddress !== accountPortalAddress)) {
+    await signOut(firebaseAuth);
+    throw new Error(
+      requestedPortalAddress
+        ? 'Alamat portal tidak sesuai dengan akun ini.'
+        : 'Masukkan alamat portal Anda untuk masuk sebagai user.'
+    );
+  }
   await removeLegacyStoredPassword(result.user.uid, profile);
   return {
     uid: result.user.uid,
     name: (profile.name as string) || result.user.displayName || email,
     username: (profile.username as string) || email,
     email,
-    role: (profile.role as 'admin' | 'user') || 'admin',
-    portalAddress: (profile.portalAddress as string) || '',
+    role,
+    portalAddress: accountPortalAddress,
     location: profile.location as string | undefined,
     createdAt: (profile.createdAt as string) || new Date().toISOString(),
   };

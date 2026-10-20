@@ -80,10 +80,40 @@ export interface CompletedPmReportExport {
     duration: string;
     file: string;
     photoUrl?: string;
+    caption?: string;
+    photos?: Array<{ name?: string; photoUrl?: string; caption?: string }>;
     time: string;
     desc: string;
     status?: string;
   }>;
+}
+
+function expandPhotoEvidence<T extends {
+  file: string;
+  photoUrl?: string;
+  caption?: string;
+  photos?: Array<{ name?: string; photoUrl?: string; caption?: string }>;
+}>(item: T): Array<T & { file: string; photoUrl?: string; caption?: string }> {
+  if (!item.photos?.length) return [item];
+  return item.photos.map((photo) => ({
+    ...item,
+    file: photo.name || item.file,
+    photoUrl: photo.photoUrl || item.photoUrl,
+    caption: photo.caption || '',
+  }));
+}
+
+function formatVerificationTime(value: string): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('id-ID', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export async function downloadCompletedPmReport(report: CompletedPmReportExport): Promise<void> {
@@ -170,12 +200,14 @@ export async function downloadCompletedPmReport(report: CompletedPmReportExport)
     { header: 'Status / Kondisi', key: 'status', width: 20 },
     { header: 'Durasi', key: 'duration', width: 16 },
     { header: 'Foto Bukti', key: 'photo', width: 28 },
+    { header: 'Caption Foto', key: 'caption', width: 36 },
     { header: 'Waktu Verifikasi', key: 'time', width: 28 },
     { header: 'Keterangan', key: 'notes', width: 54 },
   ];
   const header = details.getRow(1);
   styleTableHeader(header);
-  const rows = report.subJobs.map((item, index) => details.addRow({
+  const detailItems = report.subJobs.flatMap((item) => expandPhotoEvidence(item));
+  const rows = detailItems.map((item, index) => details.addRow({
     no: index + 1,
     subtask: item.name,
     task: item.name,
@@ -183,11 +215,12 @@ export async function downloadCompletedPmReport(report: CompletedPmReportExport)
     status: item.status || 'Belum diisi',
     duration: item.duration,
     photo: item.file,
-    time: item.time,
+    caption: item.caption || '',
+    time: formatVerificationTime(item.time),
     notes: item.desc,
   }));
   styleBodyRows(rows);
-  await addPhotoEvidence(workbook, details, report.subJobs, 2, 6);
+  await addPhotoEvidence(workbook, details, detailItems, 2, 6);
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
@@ -281,11 +314,14 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     { header: 'Status / Kondisi', key: 'status', width: 22 },
     { header: 'Durasi', key: 'duration', width: 16 },
     { header: 'Foto Bukti', key: 'photo', width: 28 },
+    { header: 'Caption Foto', key: 'caption', width: 36 },
     { header: 'Waktu Verifikasi', key: 'time', width: 28 },
     { header: 'Keterangan', key: 'notes', width: 54 },
   ];
   styleTableHeader(details.getRow(1));
-  const detailItems = reports.flatMap((report) => report.subJobs.map((item) => ({ report, item })));
+  const detailItems = reports.flatMap((report) => report.subJobs.flatMap((item) =>
+    expandPhotoEvidence(item).map((photoItem) => ({ report, item: photoItem }))
+  ));
   const detailRows = detailItems.map(({ report, item }) => details.addRow({
     reportId: report.id,
     title: report.title,
@@ -294,7 +330,8 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     status: item.status || 'Belum diisi',
     duration: item.duration,
     photo: item.file,
-    time: item.time,
+    caption: item.caption || '',
+    time: formatVerificationTime(item.time),
     notes: item.desc,
   }));
   styleBodyRows(detailRows);
@@ -305,7 +342,7 @@ export async function downloadCompletedPmReports(reports: CompletedPmReportExpor
     2,
     6
   );
-  details.autoFilter = { from: 'A1', to: 'I1' };
+  details.autoFilter = { from: 'A1', to: 'J1' };
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -500,21 +537,33 @@ export async function downloadPmReportExcel(
     const devices = Array.isArray(progress.devices)
       ? progress.devices as Record<string, unknown>[]
       : [];
-    return devices.map((device) => {
+    return devices.flatMap((device) => {
       const formData = device.formData && typeof device.formData === 'object'
         ? device.formData as Record<string, unknown>
         : {};
-      return {
-        userUid: String(progress.userUid || ''),
-        technicianName: String(progress.technicianName || ''),
-        location: String(progress.location || device.location || ''),
-        taskTitle: String(device.taskTitle || ''),
-        deviceLocation: String(device.location || ''),
-        file: String(formData.photoName || 'Foto bukti'),
-        photoUrl: typeof formData.photo === 'string' && formData.photo.startsWith('https://')
-          ? formData.photo
-          : undefined,
-      };
+      const photos = Array.isArray(formData.photos)
+        ? formData.photos as Record<string, unknown>[]
+        : [];
+      const evidencePhotos = photos.length > 0
+        ? photos
+        : [{
+            url: formData.photo,
+            name: formData.photoName,
+            caption: '',
+          }];
+      return evidencePhotos.map((photo) => ({
+          userUid: String(progress.userUid || ''),
+          technicianName: String(progress.technicianName || ''),
+          location: String(progress.location || device.location || ''),
+          taskTitle: String(device.taskTitle || ''),
+          deviceLocation: String(device.location || ''),
+          file: String(photo.name || formData.photoName || 'Foto bukti'),
+          caption: String(photo.caption || ''),
+          photoUrl: typeof (photo.url || photo.photoUrl) === 'string'
+            && String(photo.url || photo.photoUrl).startsWith('https://')
+            ? String(photo.url || photo.photoUrl)
+            : undefined,
+        }));
     });
   });
   const reportEvidence = completedReports
@@ -523,17 +572,31 @@ export async function downloadPmReportExcel(
       const subJobs = Array.isArray(report.subJobs)
         ? report.subJobs as Record<string, unknown>[]
         : [];
-      return subJobs.map((subJob) => ({
-        userUid: String(report.submittedBy || ''),
-        technicianName: String(report.technicianName || report.submittedBy || ''),
-        location: String(report.region || ''),
-        taskTitle: String(subJob.name || ''),
-        deviceLocation: String(subJob.device || ''),
-        file: String(subJob.file || 'Foto bukti'),
-        photoUrl: typeof subJob.photoUrl === 'string' && subJob.photoUrl.startsWith('https://')
-          ? subJob.photoUrl
-          : undefined,
-      }));
+      return subJobs.flatMap((subJob) => {
+        const photos = Array.isArray(subJob.photos)
+          ? subJob.photos as Record<string, unknown>[]
+          : [];
+        const evidencePhotos = photos.length > 0
+          ? photos
+          : [{
+              photoUrl: subJob.photoUrl,
+              name: subJob.file,
+              caption: subJob.caption,
+            }];
+        return evidencePhotos.map((photo) => ({
+            userUid: String(report.submittedBy || ''),
+            technicianName: String(report.technicianName || report.submittedBy || ''),
+            location: String(report.region || ''),
+            taskTitle: String(subJob.name || ''),
+            deviceLocation: String(subJob.device || ''),
+            file: String(photo.name || photo.file || subJob.file || 'Foto bukti'),
+            caption: String(photo.caption || ''),
+            photoUrl: typeof (photo.photoUrl || photo.url) === 'string'
+              && String(photo.photoUrl || photo.url).startsWith('https://')
+              ? String(photo.photoUrl || photo.url)
+              : undefined,
+          }));
+      });
     });
   const normalizedEvidenceValue = (value: string) => value.trim().toLocaleLowerCase('id-ID');
   reportEvidence.forEach((reportItem) => {
@@ -541,6 +604,7 @@ export async function downloadPmReportExcel(
       (!reportItem.userUid || !progressItem.userUid || reportItem.userUid === progressItem.userUid)
       && normalizedEvidenceValue(progressItem.taskTitle) === normalizedEvidenceValue(reportItem.taskTitle)
       && normalizedEvidenceValue(progressItem.deviceLocation) === normalizedEvidenceValue(reportItem.deviceLocation)
+      && (!reportItem.photoUrl || !progressItem.photoUrl || progressItem.photoUrl === reportItem.photoUrl)
     );
     if (matchingProgressItem) {
       if (!matchingProgressItem.photoUrl && reportItem.photoUrl) {
@@ -563,6 +627,7 @@ export async function downloadPmReportExcel(
     { header: 'Something To Do', key: 'task', width: 38 },
     { header: 'Titik Perangkat', key: 'device', width: 32 },
     { header: 'Foto Bukti', key: 'photo', width: 28 },
+    { header: 'Caption Foto', key: 'caption', width: 36 },
   ];
   styleTableHeader(evidenceSheet.getRow(1));
   const evidenceRows = evidenceItems.map((item) => evidenceSheet.addRow({
@@ -571,6 +636,7 @@ export async function downloadPmReportExcel(
     task: item.taskTitle,
     device: item.deviceLocation,
     photo: item.file,
+    caption: item.caption,
   }));
   styleBodyRows(evidenceRows);
   await addPhotoEvidence(workbook, evidenceSheet, evidenceItems, 2, 4);

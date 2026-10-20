@@ -104,6 +104,8 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
   const [logicRanges, setLogicRanges] = useState<ConditionLogicRange[]>([]);
   const [newLogicRange, setNewLogicRange] = useState({ min: '', max: '', output: '' });
   const [togglePhoto, setTogglePhoto] = useState(false);
+  const [photoLimit, setPhotoLimit] = useState(1);
+  const [photoCaptionRequired, setPhotoCaptionRequired] = useState(false);
   const [toggleCondition, setToggleCondition] = useState(false);
   const [toggleLogicCondition, setToggleLogicCondition] = useState(false);
   const [toggleTimestamp, setToggleTimestamp] = useState(false);
@@ -368,6 +370,8 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     setEditingItemId(item.id);
     setNewItemText(item.text);
     setTogglePhoto(item.hasPhoto);
+    setPhotoLimit(Math.max(1, Math.floor(item.photoLimit || 1)));
+    setPhotoCaptionRequired(Boolean(item.photoCaptionRequired));
     setToggleTimestamp(item.hasTimestamp);
     setToggleNotes(Boolean(item.hasNotes));
     const conditionOptionsForItem = item.conditionOptions || [];
@@ -403,6 +407,8 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
     setLogicRanges([]);
     setNewLogicRange({ min: '', max: '', output: '' });
     setTogglePhoto(false);
+    setPhotoLimit(1);
+    setPhotoCaptionRequired(false);
     setToggleCondition(false);
     setToggleLogicCondition(false);
     setToggleTimestamp(false);
@@ -471,6 +477,8 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       id: itemId,
       text: trimmed,
       hasPhoto: togglePhoto,
+      photoLimit: togglePhoto ? Math.max(1, Math.floor(photoLimit || 1)) : 0,
+      photoCaptionRequired: togglePhoto && photoCaptionRequired,
       hasCondition: toggleCondition || toggleLogicCondition,
       ...(toggleCondition || toggleLogicCondition
         ? {
@@ -1321,9 +1329,14 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                             <div className="min-w-0">
                               <p className="font-label-md text-label-md font-semibold text-on-surface">{item.text}</p>
                               <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-                                {item.hasPhoto && <span className="rounded-full bg-surface-container px-2 py-0.5">Foto</span>}
+                                {item.hasPhoto && (
+                                  <span className="rounded-full bg-surface-container px-2 py-0.5">
+                                    Foto wajib · maks. {item.photoLimit || 1}
+                                    {item.photoCaptionRequired ? ' · caption wajib' : ''}
+                                  </span>
+                                )}
                                 {item.hasCondition && <span className="rounded-full bg-secondary-fixed px-2 py-0.5">{item.conditionText || 'Kondisi'}</span>}
-                                {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Tanggal &amp; Waktu</span>}
+                                {item.hasTimestamp && <span className="rounded-full bg-surface-container px-2 py-0.5">Hari, Tanggal &amp; Jam</span>}
                                 {item.hasNotes && <span className="rounded-full bg-tertiary-fixed px-2 py-0.5">Keterangan</span>}
                               </div>
                             </div>
@@ -1425,7 +1438,13 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                 </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
-                    <input checked={togglePhoto} onChange={(event) => setTogglePhoto(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
+                    <input checked={togglePhoto} onChange={(event) => {
+                      setTogglePhoto(event.target.checked);
+                      if (!event.target.checked) {
+                        setPhotoLimit(1);
+                        setPhotoCaptionRequired(false);
+                      }
+                    }} className="h-4 w-4 accent-primary" type="checkbox" />
                     <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">photo_camera</span>Input gambar wajib</span>
                   </label>
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
@@ -1438,13 +1457,41 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
                   </label>
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface">
                     <input checked={toggleTimestamp} onChange={(event) => setToggleTimestamp(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
-                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">schedule</span>Tanggal &amp; Waktu</span>
+                    <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px] text-primary">schedule</span>Hari, Tanggal &amp; Jam</span>
                   </label>
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 p-2.5 text-on-surface sm:col-span-2">
                     <input checked={toggleNotes} onChange={(event) => setToggleNotes(event.target.checked)} className="h-4 w-4 accent-primary" type="checkbox" />
                     <span className="flex items-center gap-1.5 text-sm font-semibold"><span className="material-symbols-outlined text-[16px]">description</span>Keterangan petugas</span>
                   </label>
                 </div>
+                {togglePhoto && (
+                  <div className="grid grid-cols-1 gap-3 rounded-DEFAULT bg-surface-container-low p-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm font-semibold text-on-surface">
+                      Batas jumlah foto per Something To Do
+                      <input
+                        aria-label="Batas jumlah foto"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={photoLimit}
+                        onChange={(event) => setPhotoLimit(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
+                        className="w-full rounded-DEFAULT border border-outline-variant/30 bg-surface-container-lowest px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2.5 rounded-DEFAULT border border-outline-variant/20 bg-surface-container-lowest p-2.5 text-on-surface">
+                      <input
+                        checked={photoCaptionRequired}
+                        onChange={(event) => setPhotoCaptionRequired(event.target.checked)}
+                        className="h-4 w-4 accent-primary"
+                        type="checkbox"
+                      />
+                      <span className="text-sm font-semibold">Caption wajib diisi untuk setiap foto</span>
+                    </label>
+                    <p className="text-xs text-secondary sm:col-span-2">
+                      User dapat mengunggah sampai batas ini dan menambahkan caption terpisah pada setiap foto.
+                    </p>
+                  </div>
+                )}
                 {toggleCondition && (
                   <div className="flex flex-col gap-3 rounded-DEFAULT bg-surface-container-low p-3">
                     <h4 className="font-label-md text-label-md font-semibold text-on-surface">Daftar Pilihan Kondisi</h4>

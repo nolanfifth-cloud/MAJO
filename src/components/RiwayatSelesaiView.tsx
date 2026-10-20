@@ -31,6 +31,8 @@ export interface SubJobDetail {
   duration: string;
   file: string;
   photoUrl?: string;
+  caption?: string;
+  photos?: Array<{ name?: string; photoUrl?: string; caption?: string }>;
   time: string;
   desc: string;
   status?: string;
@@ -1190,8 +1192,15 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
                                   Waktu Verifikasi
                                 </span>
                                 <span className="mr-2 text-slate-400">:</span>
-                                <span className="text-slate-600">{activeSubJob.time}</span>
+                                <span className="text-slate-600">{formatVerificationTime(activeSubJob.time)}</span>
                               </div>
+                              {activeSubJob.caption && (
+                                <div className="flex items-start md:col-span-2">
+                                  <span className="w-28 shrink-0 font-medium text-slate-500">Caption Foto</span>
+                                  <span className="mr-2 text-slate-400">:</span>
+                                  <span className="text-slate-700">{activeSubJob.caption}</span>
+                                </div>
+                              )}
 
                               {/* Keterangan Hasil */}
                               <div className="flex items-start md:col-span-2">
@@ -1322,3 +1331,16 @@ export const RiwayatSelesaiView: React.FC<RiwayatSelesaiViewProps> = ({ onTrigge
     </div>
   );
 };
+
+function formatVerificationTime(value: string): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('id-ID', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
