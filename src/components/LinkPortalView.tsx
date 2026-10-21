@@ -88,11 +88,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       return false;
     }
   });
-  const eligibleRegionLocations = useMemo(() => masterLocations.filter((location) => {
-    const hierarchy = Object.entries(locationHierarchy)
-      .find(([name]) => name.toLowerCase() === location.toLowerCase())?.[1] || [];
-    return hierarchy.some((subLocation) => subLocation.places.length > 0);
-  }), [masterLocations, locationHierarchy]);
+  const eligibleRegionLocations = masterLocations;
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const firestoreSaveQueue = useRef(Promise.resolve());
   const hasLocalEdits = useRef(false);
@@ -435,7 +431,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const handleChooseBranchForRegion = (branchName: string) => {
     if (!targetRegionForBranch) return;
     if (!eligibleRegionLocations.includes(branchName)) {
-      showToast('Lokasi wilayah harus sudah memiliki sub-lokasi dan tempat di tab Lokasi & Sub-Lokasi.', 'info');
+      showToast('Lokasi tersebut tidak lagi tersedia di Master Lokasi. Muat ulang daftar lalu coba lagi.', 'info');
       return;
     }
     const updatedRegions = regions.map((r) => {
@@ -862,7 +858,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   ))}
                 </select>
                 <span className="text-outline text-[12px]">
-                  Pilih lokasi yang sudah memiliki sub-lokasi dan tempat di struktur utama.
+                  Pilih lokasi dari master. Sub-lokasi dan tempat akan ikut ditampilkan jika tersedia.
                 </span>
               </div>
             </div>
@@ -960,7 +956,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               <div className="custom-scrollbar flex flex-col gap-1.5 max-h-52 overflow-y-auto pr-1">
                 {filteredMasterBranchCandidates.length === 0 ? (
                   <div className="p-4 text-center text-outline text-body-sm bg-surface-container-low rounded-DEFAULT">
-                    Tidak ada lokasi lengkap yang cocok. Tambahkan sub-lokasi dan tempat terlebih dahulu di tab Lokasi &amp; Sub-Lokasi.
+                    Tidak ada lokasi yang cocok dengan pencarian. Periksa kembali kata kunci atau tambahkan lokasi di tab Lokasi &amp; Sub-Lokasi.
                   </div>
                 ) : (
                   filteredMasterBranchCandidates.map((loc) => {
