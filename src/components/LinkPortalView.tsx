@@ -2101,8 +2101,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                     requireUserSubLocation ? 'bg-primary' : 'bg-outline-variant'
                   }`}
                 >
-                  <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                    requireUserSubLocation ? 'translate-x-6' : 'translate-x-1'
+                  <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    requireUserSubLocation ? 'translate-x-5' : 'translate-x-0'
                   }`} />
                 </button>
               </div>
