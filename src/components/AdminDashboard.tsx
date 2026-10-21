@@ -6,7 +6,7 @@ import { LinkPortalView } from './LinkPortalView';
 import { ProfileSettingsView } from './ProfileSettingsView';
 import { ApprovalReport, ApprovalView } from './ApprovalView';
 import { downloadPmReportExcel } from '../services/excelExport';
-import { buildTargetAreaDetails, getPortalConfig } from '../services/workflowStore';
+import { buildTargetAreaDetails, getPortalConfig, jobTargetsAccountLocation } from '../services/workflowStore';
 import { applyJobProgress } from '../services/jobProgress';
 import {
   loadCompletedReportsFromFirestore,
@@ -257,9 +257,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           .filter((job) => !deletedJobIds.current.has(job.id))
           .map((job) => {
             if (job.createdBy !== currentUser?.uid) return job;
-            const locations = new Set(job.targetWilayahList || []);
             const targetUserUids = accounts
-              .filter((account) => account.role === 'user' && account.uid && account.location && locations.has(account.location))
+              .filter((account) =>
+                account.role === 'user'
+                && account.uid
+                && account.location
+                && jobTargetsAccountLocation(job, account.location, account.subLocation)
+              )
               .map((account) => account.uid as string);
             return { ...job, targetUserUids };
           });
@@ -748,7 +752,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         );
         return matchingGroup ? matchingGroup.locations : [region];
       });
-      const targetAreaDetails = buildTargetAreaDetails(selectedRegions, portalConfig.masterGroups);
+      const targetAreaDetails = buildTargetAreaDetails(
+        selectedRegions,
+        portalConfig.masterGroups,
+        portalConfig.locationHierarchy
+      );
       const newPm: PmItem = {
         id: newId,
         code: newCode,
@@ -812,7 +820,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         && targetWilayahList.every((location) => modalTargetPm.targetWilayahList?.includes(location));
       const targetAreaDetails = sameTargetLocations && modalTargetPm.targetAreaDetails?.length
         ? modalTargetPm.targetAreaDetails
-        : buildTargetAreaDetails(selectedRegions, portalConfig.masterGroups);
+        : buildTargetAreaDetails(
+            selectedRegions,
+            portalConfig.masterGroups,
+            portalConfig.locationHierarchy
+          );
       const updatedPm: PmItem = {
         ...modalTargetPm,
         title: editTitle.trim(),
@@ -822,6 +834,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         regions: editRegions.trim(),
         targetWilayahList,
         targetAreaDetails,
+        targetSubLocationsByLocation: sameTargetLocations
+          ? modalTargetPm.targetSubLocationsByLocation || {}
+          : {},
         pic: editPic,
         modules: modulesToSave,
         totalCount: totalChecklistItems,
@@ -1086,6 +1101,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   setShowProfileMenu(false);
+                  if (!showNotificationMenu) markAllNotificationsRead();
                   setShowNotificationMenu((open) => !open);
                 }}
               >

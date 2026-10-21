@@ -14,6 +14,7 @@ interface LoginViewProps {
     name?: string;
     role: 'admin' | 'user';
     location?: string;
+    subLocation?: string;
     email?: string;
     portalAddress?: string;
     createdAt?: string;
@@ -80,6 +81,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           name: displayName,
           role,
           location: foundAccount.location,
+          subLocation: foundAccount.subLocation,
           email: foundAccount.email,
           portalAddress: foundAccount.portalAddress,
           createdAt: foundAccount.createdAt,

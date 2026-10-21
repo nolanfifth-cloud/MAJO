@@ -1,6 +1,13 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { RegionConfig, StaffResetRequest } from '../types';
-import { getPortalConfig, getPortalConfigForAddress, savePortalConfig } from '../services/workflowStore';
+import {
+  getPortalConfig,
+  getPortalConfigForAddress,
+  getPortalLocationHierarchy,
+  getSubLocationsForLocation,
+  hasCompletePortalLocationHierarchy,
+  savePortalConfig,
+} from '../services/workflowStore';
 import { hasRealPortalLocation, loadPortalConfigFromFirestore, savePortalConfigToFirestore, subscribeToPasswordResetRequestsFromFirestore } from '../services/firestoreStore';
 import { isFirebaseConfigured, resetPasswordFromRequest } from '../services/firebase';
 
@@ -13,6 +20,18 @@ interface LinkPortalViewProps {
 const INITIAL_MASTER_LOCATIONS: string[] = [];
 const INITIAL_REGIONS: RegionConfig[] = [];
 const INITIAL_STAFF_REQUESTS: StaffResetRequest[] = [];
+
+const syncRegionsToLocationHierarchy = (
+  sourceRegions: RegionConfig[],
+  sourceHierarchy: NonNullable<RegionConfig['locationHierarchy']>
+): RegionConfig[] => sourceRegions.map((region) => ({
+  ...region,
+  locationHierarchy: Object.fromEntries(region.locations.flatMap((location) => {
+    const entry = Object.entries(sourceHierarchy)
+      .find(([name]) => name.toLowerCase() === location.toLowerCase());
+    return entry ? [[location, entry[1]]] : [];
+  })),
+}));
 
 const mapResetRequestToStaff = (request: Record<string, unknown>): StaffResetRequest => {
   const username = String(request.username || 'Akun tanpa username');
@@ -55,11 +74,13 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const localPortalConfig = getPortalConfigForAddress(activePortalAddress);
 
   // State: Tab & Mode
-  const [currentTab, setCurrentTab] = useState<'wilayah' | 'hanya-lokasi'>('wilayah');
+  const [currentTab, setCurrentTab] = useState<'wilayah' | 'hanya-lokasi'>('hanya-lokasi');
 
   // State: Data
   const [masterLocations, setMasterLocations] = useState<string[]>(localPortalConfig.masterWilayah || INITIAL_MASTER_LOCATIONS);
   const [regions, setRegions] = useState<RegionConfig[]>(localPortalConfig.masterGroups || INITIAL_REGIONS);
+  const [locationHierarchy, setLocationHierarchy] = useState(() => getPortalLocationHierarchy(localPortalConfig));
+  const [requireUserSubLocation, setRequireUserSubLocation] = useState(Boolean(localPortalConfig.requireUserSubLocation));
   const [isPortalActivated, setIsPortalActivated] = useState<boolean>(() => {
     try {
       return Boolean(localPortalConfig.isActivated);
@@ -67,11 +88,21 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       return false;
     }
   });
+  const eligibleRegionLocations = useMemo(() => masterLocations.filter((location) => {
+    const hierarchy = Object.entries(locationHierarchy)
+      .find(([name]) => name.toLowerCase() === location.toLowerCase())?.[1] || [];
+    return hierarchy.some((subLocation) => subLocation.places.length > 0);
+  }), [masterLocations, locationHierarchy]);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const firestoreSaveQueue = useRef(Promise.resolve());
   const hasLocalEdits = useRef(false);
 
-  const hasConfiguredLocation = masterLocations.length > 0 || regions.some((region) => region.locations.length > 0);
+  const hasConfiguredLocation = hasCompletePortalLocationHierarchy({
+    masterWilayah: masterLocations,
+    masterGroups: regions,
+    locationHierarchy,
+    requireUserSubLocation,
+  });
   const isPortalReady = isPortalActivated && hasConfiguredLocation;
 
   useEffect(() => {
@@ -87,6 +118,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       if (cloudHasOrganizationData && config) {
         setMasterLocations(config.masterWilayah || []);
         setRegions(config.masterGroups || []);
+        setLocationHierarchy(getPortalLocationHierarchy(config));
+        setRequireUserSubLocation(Boolean(config.requireUserSubLocation));
         setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
         savePortalConfig(config, activePortalAddress);
         return;
@@ -104,6 +137,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       if (config) {
         setMasterLocations(config.masterWilayah || []);
         setRegions(config.masterGroups || []);
+        setLocationHierarchy(getPortalLocationHierarchy(config));
+        setRequireUserSubLocation(Boolean(config.requireUserSubLocation));
         setIsPortalActivated(Boolean(config.isActivated && hasRealPortalLocation(config)));
         savePortalConfig(config, activePortalAddress);
       }
@@ -162,8 +197,6 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const [isAddBranchModalOpen, setIsAddBranchModalOpen] = useState<boolean>(false);
   const [targetRegionForBranch, setTargetRegionForBranch] = useState<string | null>(null);
   const [searchMasterBranchQuery, setSearchMasterBranchQuery] = useState<string>('');
-  const [isQuickMasterInlineOpen, setIsQuickMasterInlineOpen] = useState<boolean>(false);
-  const [directMasterInput, setDirectMasterInput] = useState<string>('');
   const [newSubLocationInputs, setNewSubLocationInputs] = useState<Record<string, string>>({});
   const [newPlaceInputs, setNewPlaceInputs] = useState<Record<string, string>>({});
 
@@ -220,17 +253,31 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const persistPortalConfigSnapshot = async (
     nextLocations: string[],
     nextRegions: RegionConfig[],
-    nextActivated = isPortalActivated
+    nextActivated = isPortalActivated,
+    nextHierarchy = locationHierarchy,
+    nextRequireUserSubLocation = requireUserSubLocation
   ): Promise<boolean> => {
     hasLocalEdits.current = true;
+    const shouldActivate = nextActivated && hasCompletePortalLocationHierarchy({
+      masterWilayah: nextLocations,
+      masterGroups: nextRegions,
+      locationHierarchy: nextHierarchy,
+      requireUserSubLocation: nextRequireUserSubLocation,
+    });
+    if (nextActivated && !shouldActivate) {
+      setIsPortalActivated(false);
+      showToast('Link Portal dinonaktifkan karena struktur lokasi belum lengkap.', 'info');
+    }
     const currentConfig = getPortalConfigForAddress(activePortalAddress);
     const nextConfig: typeof currentConfig = {
       ...currentConfig,
       portalAddress: activePortalAddress || currentConfig.portalAddress || 'pt-majo-logistik-indo.majo.id',
       portalLink: activePortalAddress || currentConfig.portalLink || 'pt-majo-logistik-indo.majo.id',
-      isActivated: nextActivated,
+      isActivated: shouldActivate,
       masterWilayah: nextLocations,
       masterGroups: nextRegions,
+      locationHierarchy: nextHierarchy,
+      requireUserSubLocation: nextRequireUserSubLocation,
     };
 
     savePortalConfig(nextConfig, activePortalAddress);
@@ -250,7 +297,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Gagal menyimpan ke Firebase.';
-      if (nextActivated) setIsPortalActivated(false);
+      if (shouldActivate) setIsPortalActivated(false);
       savePortalConfig({ ...nextConfig, isActivated: false }, activePortalAddress);
       showToast(`Data lokasi/wilayah tetap tersimpan lokal, tetapi Firebase gagal menyimpan: ${message}`, 'info');
       return false;
@@ -273,24 +320,33 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   }, [filteredFlatLocations, flatCurrentPage, flatItemsPerPage]);
 
   // Copy Link to Clipboard
-  const handleCopyLink = () => {
+  const handleCopyLink = async () => {
     if (!isPortalReady) {
-      showToast('Tautan terkunci! Tambahkan minimal 1 lokasi lalu simpan konfigurasi portal terlebih dahulu.', 'info');
+      showToast('Tautan terkunci. Lengkapi struktur lokasi yang diwajibkan, lalu simpan konfigurasi portal.', 'info');
       return;
     }
     const config = getPortalConfigForAddress(activePortalAddress);
     const url = config.portalLink || `${activePortalAddress}/register`;
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(url).catch(() => {});
+    if (!navigator.clipboard) {
+      showToast('Browser tidak menyediakan akses clipboard. Salin alamat portal secara manual.', 'info');
+      return;
     }
-    showToast('Tautan pendaftaran berhasil disalin ke clipboard!', 'copy');
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Tautan pendaftaran berhasil disalin ke clipboard!', 'copy');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Akses clipboard ditolak browser.';
+      showToast(`Tautan gagal disalin: ${message}`, 'info');
+    }
   };
 
   // Save / Activate Portal
   const handleSavePortal = () => {
     if (!hasConfiguredLocation) {
       setIsPortalActivated(false);
-      showToast('Belum dapat diaktifkan. Tambahkan minimal 1 lokasi operasional terlebih dahulu.', 'info');
+      showToast(requireUserSubLocation
+        ? 'Belum dapat diaktifkan. Setiap lokasi harus memiliki minimal satu sub-lokasi kerja terlebih dahulu.'
+        : 'Belum dapat diaktifkan. Tambahkan minimal 1 lokasi operasional terlebih dahulu.', 'info');
       return;
     }
     setIsSaving(true);
@@ -298,13 +354,29 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       setIsSaving(false);
       setIsPortalActivated(true);
       try {
-        const savedToFirebase = await persistPortalConfigSnapshot(masterLocations, regions, true);
+        const savedToFirebase = await persistPortalConfigSnapshot(
+          masterLocations, regions, true, locationHierarchy, requireUserSubLocation
+        );
         if (!savedToFirebase) return;
       } catch {
         // Ignore
       }
       showToast('Struktur organisasi berhasil disimpan dan Link Portal aktif!', 'success');
     }, 600);
+  };
+
+  const handleSubLocationRequirementChange = (enabled: boolean) => {
+    const hasSubLocations = Object.values(locationHierarchy).some((items) => items.length > 0);
+    const nextActivated = enabled && !hasSubLocations ? false : isPortalActivated;
+    setRequireUserSubLocation(enabled);
+    setIsPortalActivated(nextActivated);
+    void persistPortalConfigSnapshot(
+      masterLocations,
+      regions,
+      nextActivated,
+      locationHierarchy,
+      enabled
+    );
   };
 
   // Add Flat Location
@@ -316,8 +388,10 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       return;
     }
     const nextLocations = [val, ...masterLocations];
+    const nextHierarchy = { ...locationHierarchy, [val]: locationHierarchy[val] || [] };
     setMasterLocations(nextLocations);
-    void persistPortalConfigSnapshot(nextLocations, regions, isPortalActivated);
+    setLocationHierarchy(nextHierarchy);
+    void persistPortalConfigSnapshot(nextLocations, regions, isPortalActivated, nextHierarchy);
     setNewFlatLocationInput('');
     setFlatCurrentPage(1);
     showToast(`Lokasi baru "${val}" ditambahkan ke Master Data`, 'success');
@@ -332,7 +406,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
     const locs: string[] = [];
     const nextLocations = [...masterLocations];
-    if (bName && masterLocations.includes(bName)) {
+    if (bName && eligibleRegionLocations.includes(bName)) {
       locs.push(bName);
     }
 
@@ -342,10 +416,12 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       locations: locs,
     };
 
-    const nextRegions = [...regions, newRegion];
+    const nextRegions = syncRegionsToLocationHierarchy([...regions, newRegion], locationHierarchy);
+    const nextHierarchy = getPortalLocationHierarchy({ masterGroups: nextRegions, locationHierarchy });
     setMasterLocations(nextLocations);
     setRegions(nextRegions);
-    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
+    setLocationHierarchy(nextHierarchy);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated, nextHierarchy);
     setNewRegionName('');
     setNewRegionInitialBranch('');
     setIsAddRegionModalOpen(false);
@@ -356,14 +432,16 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const handleOpenAddBranch = (regionId: string) => {
     setTargetRegionForBranch(regionId);
     setSearchMasterBranchQuery('');
-    setDirectMasterInput('');
-    setIsQuickMasterInlineOpen(false);
     setIsAddBranchModalOpen(true);
   };
 
   const handleChooseBranchForRegion = (branchName: string) => {
     if (!targetRegionForBranch) return;
-    const nextRegions = regions.map((r) => {
+    if (!eligibleRegionLocations.includes(branchName)) {
+      showToast('Lokasi wilayah harus sudah memiliki sub-lokasi dan tempat di tab Lokasi & Sub-Lokasi.', 'info');
+      return;
+    }
+    const updatedRegions = regions.map((r) => {
       if (r.id === targetRegionForBranch) {
         if (!r.locations.includes(branchName)) {
           return { ...r, locations: [...r.locations, branchName] };
@@ -371,28 +449,14 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
       }
       return r;
     });
-    setRegions(nextRegions);
     const nextLocations = masterLocations.includes(branchName) ? masterLocations : [branchName, ...masterLocations];
-    setMasterLocations(nextLocations);
-    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
-    showToast(`Lokasi "${branchName}" ditambahkan ke wilayah!`, 'success');
-  };
-
-  const handleDirectMasterRegister = () => {
-    const val = directMasterInput.trim();
-    if (!val) return;
-    const nextLocations = masterLocations.includes(val) ? masterLocations : [val, ...masterLocations];
-    const nextRegions = regions.map((r) => {
-      if (r.id === targetRegionForBranch && !r.locations.includes(val)) {
-        return { ...r, locations: [...r.locations, val] };
-      }
-      return r;
-    });
+    const nextHierarchy = { ...locationHierarchy, [branchName]: locationHierarchy[branchName] || [] };
+    const nextRegions = syncRegionsToLocationHierarchy(updatedRegions, nextHierarchy);
     setMasterLocations(nextLocations);
     setRegions(nextRegions);
-    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
-    showToast(`Lokasi "${val}" ditambahkan ke wilayah!`, 'success');
-    setDirectMasterInput('');
+    setLocationHierarchy(nextHierarchy);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated, nextHierarchy);
+    showToast(`Lokasi "${branchName}" ditambahkan ke wilayah!`, 'success');
   };
 
   const handleAddSubLocation = (regionId: string, locationName: string) => {
@@ -400,28 +464,21 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     const name = (newSubLocationInputs[inputKey] || '').trim();
     if (!name) return;
 
-    let wasDuplicate = false;
-    const nextRegions = regions.map((region) => {
-      if (region.id !== regionId) return region;
-      const existing = region.locationHierarchy?.[locationName] || [];
-      if (existing.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
-        wasDuplicate = true;
-        return region;
-      }
-      return {
-        ...region,
-        locationHierarchy: {
-          ...region.locationHierarchy,
-          [locationName]: [...existing, { id: `sub_${Date.now()}`, name, places: [] }],
-        },
-      };
-    });
-    if (wasDuplicate) {
+    const existingKey = Object.keys(locationHierarchy)
+      .find((location) => location.toLowerCase() === locationName.toLowerCase()) || locationName;
+    const existing = locationHierarchy[existingKey] || [];
+    if (existing.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
       showToast(`Sub Lokasi "${name}" sudah ada di ${locationName}.`, 'info');
       return;
     }
-    setRegions(nextRegions);
-    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated);
+    const nextHierarchy = {
+      ...locationHierarchy,
+      [existingKey]: [...existing, { id: `sub_${Date.now()}`, name, places: [] }],
+    };
+    const syncedRegions = syncRegionsToLocationHierarchy(regions, nextHierarchy);
+    setRegions(syncedRegions);
+    setLocationHierarchy(nextHierarchy);
+    void persistPortalConfigSnapshot(masterLocations, syncedRegions, isPortalActivated, nextHierarchy);
     setNewSubLocationInputs((prev) => ({ ...prev, [inputKey]: '' }));
     showToast(`Sub Lokasi "${name}" berhasil ditambahkan.`, 'success');
   };
@@ -431,33 +488,112 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     const name = (newPlaceInputs[inputKey] || '').trim();
     if (!name) return;
 
+    const locationKey = Object.keys(locationHierarchy)
+      .find((location) => location.toLowerCase() === locationName.toLowerCase()) || locationName;
     let wasDuplicate = false;
-    const nextRegions = regions.map((region) => {
-      if (region.id !== regionId) return region;
-      const subLocations = region.locationHierarchy?.[locationName] || [];
-      return {
-        ...region,
-        locationHierarchy: {
-          ...region.locationHierarchy,
-          [locationName]: subLocations.map((subLocation) => {
-            if (subLocation.id !== subLocationId) return subLocation;
-            if (subLocation.places.some((place) => place.toLowerCase() === name.toLowerCase())) {
-              wasDuplicate = true;
-              return subLocation;
-            }
-            return { ...subLocation, places: [...subLocation.places, name] };
-          }),
-        },
-      };
-    });
+    const nextHierarchy = {
+      ...locationHierarchy,
+      [locationKey]: (locationHierarchy[locationKey] || []).map((subLocation) => {
+        if (subLocation.id !== subLocationId) return subLocation;
+        if (subLocation.places.some((place) => place.toLowerCase() === name.toLowerCase())) {
+          wasDuplicate = true;
+          return subLocation;
+        }
+        return { ...subLocation, places: [...subLocation.places, name] };
+      }),
+    };
     if (wasDuplicate) {
       showToast(`Tempat "${name}" sudah ada di Sub Lokasi ini.`, 'info');
       return;
     }
-    setRegions(nextRegions);
-    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated);
+    const syncedRegions = syncRegionsToLocationHierarchy(regions, nextHierarchy);
+    setRegions(syncedRegions);
+    setLocationHierarchy(nextHierarchy);
+    void persistPortalConfigSnapshot(masterLocations, syncedRegions, isPortalActivated, nextHierarchy);
     setNewPlaceInputs((prev) => ({ ...prev, [inputKey]: '' }));
     showToast(`Tempat "${name}" berhasil ditambahkan.`, 'success');
+  };
+
+  const handleAddFlatSubLocation = (locationName: string) => {
+    const inputKey = `flat:${locationName}`;
+    const name = (newSubLocationInputs[inputKey] || '').trim();
+    if (!name) return;
+    const locationKey = Object.keys(locationHierarchy)
+      .find((location) => location.toLowerCase() === locationName.toLowerCase()) || locationName;
+    const existing = locationHierarchy[locationKey] || [];
+    if (existing.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+      showToast(`Sub-lokasi "${name}" sudah ada di ${locationName}.`, 'info');
+      return;
+    }
+    const nextHierarchy = {
+      ...locationHierarchy,
+      [locationKey]: [...existing, { id: `sub_${Date.now()}`, name, places: [] }],
+    };
+    const nextRegions = syncRegionsToLocationHierarchy(regions, nextHierarchy);
+    setLocationHierarchy(nextHierarchy);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated, nextHierarchy);
+    setNewSubLocationInputs((previous) => ({ ...previous, [inputKey]: '' }));
+  };
+
+  const handleAddFlatPlace = (locationName: string, subLocationId: string) => {
+    const inputKey = `flat:${locationName}:${subLocationId}`;
+    const name = (newPlaceInputs[inputKey] || '').trim();
+    if (!name) return;
+    const locationKey = Object.keys(locationHierarchy)
+      .find((location) => location.toLowerCase() === locationName.toLowerCase()) || locationName;
+    let wasDuplicate = false;
+    const nextHierarchy = {
+      ...locationHierarchy,
+      [locationKey]: (locationHierarchy[locationKey] || []).map((subLocation) => {
+        if (subLocation.id !== subLocationId) return subLocation;
+        if (subLocation.places.some((place) => place.toLowerCase() === name.toLowerCase())) {
+          wasDuplicate = true;
+          return subLocation;
+        }
+        return { ...subLocation, places: [...subLocation.places, name] };
+      }),
+    };
+    if (wasDuplicate) {
+      showToast(`Tempat "${name}" sudah ada di sub-lokasi tersebut.`, 'info');
+      return;
+    }
+    const nextRegions = syncRegionsToLocationHierarchy(regions, nextHierarchy);
+    setLocationHierarchy(nextHierarchy);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated, nextHierarchy);
+    setNewPlaceInputs((previous) => ({ ...previous, [inputKey]: '' }));
+  };
+
+  const handleDeleteFlatSubLocation = (locationName: string, subLocationId: string) => {
+    const locationKey = Object.keys(locationHierarchy)
+      .find((location) => location.toLowerCase() === locationName.toLowerCase()) || locationName;
+    const nextHierarchy = {
+      ...locationHierarchy,
+      [locationKey]: (locationHierarchy[locationKey] || [])
+        .filter((subLocation) => subLocation.id !== subLocationId),
+    };
+    const nextRegions = syncRegionsToLocationHierarchy(regions, nextHierarchy);
+    setLocationHierarchy(nextHierarchy);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated, nextHierarchy);
+  };
+
+  const handleDeleteFlatPlace = (locationName: string, subLocationId: string, placeName: string) => {
+    const locationKey = Object.keys(locationHierarchy)
+      .find((location) => location.toLowerCase() === locationName.toLowerCase()) || locationName;
+    const nextHierarchy = {
+      ...locationHierarchy,
+      [locationKey]: (locationHierarchy[locationKey] || []).map((subLocation) =>
+        subLocation.id === subLocationId
+          ? { ...subLocation, places: subLocation.places.filter((place) => place !== placeName) }
+          : subLocation
+      ),
+    };
+    const nextRegions = syncRegionsToLocationHierarchy(regions, nextHierarchy);
+    setLocationHierarchy(nextHierarchy);
+    setRegions(nextRegions);
+    void persistPortalConfigSnapshot(masterLocations, nextRegions, isPortalActivated, nextHierarchy);
   };
 
   // Double Verification Delete Helpers
@@ -512,6 +648,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
     let nextLocations = masterLocations;
     let nextRegions = regions;
+    let nextHierarchy = locationHierarchy;
 
     if (doubleDeleteConfig.type === 'region' && doubleDeleteConfig.regionId) {
       const regId = doubleDeleteConfig.regionId;
@@ -538,6 +675,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
     } else if (doubleDeleteConfig.type === 'flatLocation' && doubleDeleteConfig.locName) {
       const targetName = doubleDeleteConfig.locName;
       nextLocations = masterLocations.filter((l) => l !== targetName);
+      nextHierarchy = Object.fromEntries(Object.entries(locationHierarchy)
+        .filter(([location]) => location.toLowerCase() !== targetName.toLowerCase()));
       nextRegions = regions.map((r) => {
         const locationHierarchy = { ...r.locationHierarchy };
         delete locationHierarchy[targetName];
@@ -552,7 +691,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
     setMasterLocations(nextLocations);
     setRegions(nextRegions);
-    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated);
+    setLocationHierarchy(nextHierarchy);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, isPortalActivated, nextHierarchy);
     setDoubleDeleteConfig((prev) => ({ ...prev, isOpen: false, confirmed: false }));
   };
 
@@ -560,9 +700,12 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const handleResetToInitial = () => {
     const nextLocations: string[] = [];
     const nextRegions: RegionConfig[] = [];
+    const nextHierarchy: NonNullable<RegionConfig['locationHierarchy']> = {};
     setMasterLocations(nextLocations);
     setRegions(nextRegions);
-    void persistPortalConfigSnapshot(nextLocations, nextRegions, false);
+    setLocationHierarchy(nextHierarchy);
+    setRequireUserSubLocation(false);
+    void persistPortalConfigSnapshot(nextLocations, nextRegions, false, nextHierarchy, false);
     setFlatSearchQuery('');
     setFlatCurrentPage(1);
     setIsPortalActivated(false);
@@ -638,8 +781,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
 
   const filteredMasterBranchCandidates = useMemo(() => {
     const q = searchMasterBranchQuery.toLowerCase().trim();
-    return masterLocations.filter((loc) => loc.toLowerCase().includes(q));
-  }, [masterLocations, searchMasterBranchQuery]);
+    return eligibleRegionLocations.filter((loc) => loc.toLowerCase().includes(q));
+  }, [eligibleRegionLocations, searchMasterBranchQuery]);
 
   return (
     <div className="flex flex-col w-full min-h-screen bg-surface relative">
@@ -715,14 +858,14 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   className="px-3.5 py-2.5 rounded-DEFAULT bg-surface-container-low border border-outline/20 text-on-surface font-body-md focus:border-primary outline-none"
                 >
                   <option value="">Pilih lokasi dari Master Data</option>
-                  {masterLocations.map((location) => (
+                  {eligibleRegionLocations.map((location) => (
                     <option key={location} value={location}>
                       {location}
                     </option>
                   ))}
                 </select>
                 <span className="text-outline text-[12px]">
-                  Pilih lokasi yang sudah terdaftar di Master Data. Lokasi baru dapat ditambahkan setelah wilayah dibuat.
+                  Pilih lokasi yang sudah memiliki sub-lokasi dan tempat di struktur utama.
                 </span>
               </div>
             </div>
@@ -820,7 +963,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               <div className="custom-scrollbar flex flex-col gap-1.5 max-h-52 overflow-y-auto pr-1">
                 {filteredMasterBranchCandidates.length === 0 ? (
                   <div className="p-4 text-center text-outline text-body-sm bg-surface-container-low rounded-DEFAULT">
-                    Tidak ada lokasi cocok "{searchMasterBranchQuery}". Anda dapat mendaftarkannya di bawah.
+                    Tidak ada lokasi lengkap yang cocok. Tambahkan sub-lokasi dan tempat terlebih dahulu di tab Lokasi &amp; Sub-Lokasi.
                   </div>
                 ) : (
                   filteredMasterBranchCandidates.map((loc) => {
@@ -871,48 +1014,25 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                 )}
               </div>
 
-              {/* Quick Register to Master */}
               <div className="p-3 rounded-DEFAULT bg-surface-container-low border border-dashed border-outline/30 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-outline text-[18px]">help_outline</span>
                   <span className="text-[12px] text-on-surface-variant font-medium">
-                    Lokasi belum terdaftar?
+                    Perlu mendaftarkan lokasi baru?
                   </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsQuickMasterInlineOpen(!isQuickMasterInlineOpen)}
+                  onClick={() => {
+                    setIsAddBranchModalOpen(false);
+                    setCurrentTab('hanya-lokasi');
+                  }}
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-highest hover:bg-secondary-container text-primary font-label-sm text-[11px] font-bold transition-all cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-[14px]">add</span>
-                  <span>Daftarkan ke Master</span>
+                  <span>Kelola Lokasi</span>
                 </button>
               </div>
-
-              {isQuickMasterInlineOpen && (
-                <div className="flex flex-col gap-2 p-3 rounded-DEFAULT bg-surface-container-low border border-outline/30 animate-in fade-in duration-150">
-                  <label className="font-label-sm text-[11px] text-on-surface-variant font-semibold">
-                    Nama Lokasi Baru untuk Master Data:
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={directMasterInput}
-                      onChange={(e) => setDirectMasterInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleDirectMasterRegister()}
-                      placeholder="Misal: Palembang Depo, Solo Hub"
-                      className="flex-1 px-3 py-1.5 rounded-DEFAULT bg-surface-container-lowest border border-outline/20 text-on-surface text-[12px] outline-none focus:border-primary"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleDirectMasterRegister}
-                      className="px-3 py-1.5 rounded-DEFAULT bg-primary text-on-primary font-label-sm text-[12px] font-semibold hover:bg-primary-container shrink-0 transition-all cursor-pointer"
-                    >
-                      Simpan &amp; Tambahkan
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-surface-container">
@@ -1063,22 +1183,22 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               <div className="p-3.5 bg-surface-container-low rounded-DEFAULT border border-outline/10">
                 <h4 className="font-bold text-on-surface text-label-md flex items-center gap-1.5 mb-1">
                   <span className="material-symbols-outlined text-primary text-[18px]">hub</span>
-                  Mode 1: Wilayah &amp; Lokasi (Dual Hierarchy)
+                  Mode 1: Lokasi &amp; Sub-Lokasi
                 </h4>
                 <p>
-                  Cocok untuk perusahaan dengan operasional berskala regional luas (misal: SOR 1 Sumatera, SOR 2
-                  Jawa). Staf akan memilih provinsi/wilayah terlebih dahulu sebelum memilih unit cabang penempatan.
+                  Tambahkan lokasi kerja beserta sub-lokasi dan tempatnya. Staf dapat dipisahkan ke sub-lokasi yang
+                  ditetapkan pada akunnya.
                 </p>
               </div>
 
               <div className="p-3.5 bg-surface-container-low rounded-DEFAULT border border-outline/10">
                 <h4 className="font-bold text-on-surface text-label-md flex items-center gap-1.5 mb-1">
                   <span className="material-symbols-outlined text-primary text-[18px]">location_city</span>
-                  Mode 2: Hanya Lokasi (Flat Single Level)
+                  Mode 2: Wilayah (Opsional)
                 </h4>
                 <p>
-                  Cocok untuk operasional tunggal atau sentralisasi langsung. Calon staf langsung memilih titik unit
-                  gudang / kantor kerja dari Master Lokasi tanpa pembagian zona wilayah regional.
+                  Gunakan wilayah hanya untuk mengelompokkan lokasi-lokasi yang sudah terdaftar. Pengelompokan ini
+                  tidak mengubah lokasi dan sub-lokasi yang dipilih staf.
                 </p>
               </div>
 
@@ -1088,7 +1208,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   Keamanan Enclave Vault
                 </span>
                 <p className="text-[12px]">
-                  Tautan registrasi dilindungi oleh enkripsi kunci portal. Perubahan struktur wilayah akan langsung
+                  Tautan registrasi dilindungi oleh enkripsi kunci portal.                   Perubahan struktur lokasi akan langsung
                   tersinkronisasi secara real-time ke portal formulir registrasi calon staf.
                 </p>
               </div>
@@ -1273,7 +1393,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                     ) : (
                       <>
                         Tombol salin dan gerbang registrasi dinonaktifkan sementara. Simpan minimal{' '}
-                        <strong>1 hierarki wilayah operasional</strong> aktif di bawah untuk membuka kunci autentikasi.
+                        <strong>struktur lokasi lengkap</strong> aktif di bawah untuk membuka kunci autentikasi.
                       </>
                     )}
                   </p>
@@ -1290,7 +1410,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                       Skema Struktur Organisasi
                     </h2>
                     <span className="px-2 py-0.5 rounded-full bg-primary-fixed text-on-primary-fixed font-label-sm text-label-sm font-semibold">
-                      Wajib
+                      Lokasi Wajib
                     </span>
                   </div>
                   <p className="font-body-sm text-body-sm text-outline mt-1">
@@ -1299,38 +1419,13 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                 </div>
                 <span className="font-label-sm text-label-sm text-outline tracking-wider uppercase font-semibold">
                   {currentTab === 'wilayah'
-                    ? 'Tipe Mode: Dual (Wilayah & Cabang)'
-                    : 'Tipe Mode: Tunggal (Hanya Lokasi)'}
+                    ? 'Tipe Mode: Pengelompokan Wilayah Opsional'
+                    : 'Tipe Mode: Lokasi & Sub-Lokasi'}
                 </span>
               </div>
 
               {/* Segmented Mode Control Switcher */}
               <div className="grid grid-cols-1 md:grid-cols-2 p-1.5 rounded-DEFAULT bg-surface-container-low gap-1.5 border border-outline-variant/20">
-                <button
-                  type="button"
-                  id="tabModeWilayah"
-                  onClick={() => setCurrentTab('wilayah')}
-                  className={`flex items-center justify-center gap-3 py-3 px-4 rounded-DEFAULT font-label-md text-label-md transition-all cursor-pointer ${
-                    currentTab === 'wilayah'
-                      ? 'bg-surface-container-lowest text-on-surface shadow-xs font-bold'
-                      : 'bg-transparent hover:bg-surface-container text-on-surface-variant font-normal'
-                  }`}
-                >
-                  <span
-                    className={`material-symbols-outlined text-[20px] ${
-                      currentTab === 'wilayah' ? 'text-primary' : 'text-outline'
-                    }`}
-                  >
-                    hub
-                  </span>
-                  <div className="flex flex-col text-left">
-                    <span className="font-label-md text-label-md leading-tight text-on-surface">
-                      Wilayah &amp; Lokasi
-                    </span>
-                    <span className="font-body-sm text-body-sm text-outline">(SOR &amp; Cabang)</span>
-                  </div>
-                </button>
-
                 <button
                   type="button"
                   id="tabModeLokasi"
@@ -1346,14 +1441,39 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                       currentTab === 'hanya-lokasi' ? 'text-primary' : 'text-outline'
                     }`}
                   >
+                    hub
+                  </span>
+                  <div className="flex flex-col text-left">
+                    <span className="font-label-md text-label-md leading-tight text-on-surface">
+                      Lokasi &amp; Sub-Lokasi
+                    </span>
+                    <span className="font-body-sm text-body-sm text-outline">(Struktur lokasi utama)</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  id="tabModeWilayah"
+                  onClick={() => setCurrentTab('wilayah')}
+                  className={`flex items-center justify-center gap-3 py-3 px-4 rounded-DEFAULT font-label-md text-label-md transition-all cursor-pointer ${
+                    currentTab === 'wilayah'
+                      ? 'bg-surface-container-lowest text-on-surface shadow-xs font-bold'
+                      : 'bg-transparent hover:bg-surface-container text-on-surface-variant font-normal'
+                  }`}
+                >
+                  <span
+                    className={`material-symbols-outlined text-[20px] ${
+                      currentTab === 'wilayah' ? 'text-primary' : 'text-outline'
+                    }`}
+                  >
                     location_city
                   </span>
                   <div className="flex flex-col text-left">
                     <span className="font-label-md text-label-md leading-tight text-on-surface">
-                      Hanya Lokasi
+                      Wilayah (Opsional)
                     </span>
                     <span className="font-body-sm text-body-sm text-outline">
-                      Struktur datar tanpa regional
+                      Pengelompokan lokasi
                     </span>
                   </div>
                 </button>
@@ -1365,20 +1485,20 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                 <p className="font-body-sm text-body-sm text-on-surface-variant">
                   {currentTab === 'wilayah' ? (
                     <>
-                      Pilihan saat ini: <strong>Wilayah &amp; Lokasi</strong>. Staf yang mendaftar melalui portal akan
-                      memilih provinsi/wilayah terlebih dahulu sebelum memilih unit cabang penempatan.
+                      Pilihan saat ini: <strong>Wilayah (Opsional)</strong>. Wilayah mengelompokkan lokasi yang
+                      telah tersedia; pengaturan sub-lokasi dan tempat tetap terhubung ke lokasi tersebut.
                     </>
                   ) : (
                     <>
-                      Pilihan saat ini: <strong>Hanya Lokasi</strong>. Struktur datar sederhana. Calon staf langsung
-                      memilih titik kantor/gudang penempatan dari master database.
+                        Pilihan saat ini: <strong>Lokasi &amp; Sub-Lokasi</strong>. Atur lokasi, sub-lokasi, dan tempat
+                      kerja secara langsung tanpa perlu membuat pengelompokan wilayah.
                     </>
                   )}
                 </p>
               </div>
 
               {/* ================================================================= */}
-              {/* VIEW A: Operational Regions Hierarchy (SOR & Cabang) */}
+              {/* VIEW A: Optional region groupings */}
               {/* ================================================================= */}
               {currentTab === 'wilayah' && (
                 <div className="flex flex-col gap-4 animate-in fade-in duration-150">
@@ -1410,7 +1530,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                           </span>
                         </div>
                         <p className="font-body-sm text-body-sm text-on-surface-variant text-[12px]">
-                          Semua titik cabang di bawah grup wilayah terhubung ke Master Lokasi (tab Hanya Lokasi)
+                          Semua titik di bawah grup wilayah terhubung ke Master Lokasi (tab Lokasi &amp; Sub-Lokasi)
                           untuk mencegah duplikasi data.
                         </p>
                       </div>
@@ -1476,7 +1596,10 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                             <div className="flex flex-col gap-3">
                               {region.locations.map((locName, locIdx) => {
                                 const locationKey = `${region.id}:${locName}`;
-                                const subLocations = region.locationHierarchy?.[locName] || [];
+                                const subLocations = getSubLocationsForLocation({
+                                  masterGroups: regions,
+                                  locationHierarchy,
+                                }, locName);
                                 return (
                                   <div
                                     key={locName}
@@ -1617,7 +1740,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
               )}
 
               {/* ================================================================= */}
-              {/* VIEW B: Hanya Lokasi (Flat Single Level with Search & Pagination) */}
+              {/* VIEW B: Locations and sub-locations */}
               {/* ================================================================= */}
               {currentTab === 'hanya-lokasi' && (
                 <div className="flex flex-col gap-4 animate-in fade-in duration-150">
@@ -1713,23 +1836,20 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                         currentFlatLocations.map((locName) => (
                           <div
                             key={locName}
-                            className="p-3 rounded-DEFAULT bg-surface-container-lowest hover:bg-surface-container shadow-xs flex items-center justify-between transition-all border border-outline/10"
+                            className="p-4 rounded-DEFAULT bg-surface-container-lowest shadow-xs flex flex-col gap-4 border border-outline/10"
                           >
-                            <div className="flex items-center gap-3 truncate">
-                              <div className="w-8 h-8 rounded-full bg-surface-container-low flex items-center justify-center text-primary shadow-2xs shrink-0">
-                                <span className="material-symbols-outlined text-[18px]">domain</span>
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3 truncate">
+                                <div className="w-8 h-8 rounded-full bg-surface-container-low flex items-center justify-center text-primary shadow-2xs shrink-0">
+                                  <span className="material-symbols-outlined text-[18px]">domain</span>
+                                </div>
+                                <div className="flex flex-col truncate">
+                                  <span className="font-label-md text-label-md text-on-surface font-medium truncate">
+                                    {locName}
+                                  </span>
+                                  <span className="text-[11px] text-outline">Lokasi kerja</span>
+                                </div>
                               </div>
-                              <div className="flex flex-col truncate">
-                                <span className="font-label-md text-label-md text-on-surface font-medium truncate">
-                                  {locName}
-                                </span>
-                                <span className="text-[11px] text-outline">Master Lokasi Resmi</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0 ml-3">
-                              <span className="px-2 py-0.5 rounded-full bg-primary-fixed text-on-primary-fixed text-[11px] font-semibold hidden sm:inline-flex">
-                                Siap Digunakan
-                              </span>
                               <button
                                 type="button"
                                 onClick={() => requestDeleteFlatLocation(locName)}
@@ -1738,6 +1858,83 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                               >
                                 <span className="material-symbols-outlined text-[18px]">delete</span>
                               </button>
+                            </div>
+                            <div className="flex flex-col gap-2 pl-1">
+                              {(
+                                Object.entries(locationHierarchy)
+                                  .find(([location]) => location.toLowerCase() === locName.toLowerCase())?.[1] || []
+                              ).map((subLocation) => (
+                                <div key={subLocation.id} className="rounded-DEFAULT bg-surface-container-low p-3 flex flex-col gap-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-label-sm text-label-sm font-semibold text-on-surface">
+                                      {subLocation.name}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteFlatSubLocation(locName, subLocation.id)}
+                                      aria-label={`Hapus sub-lokasi ${subLocation.name}`}
+                                      className="text-outline hover:text-error cursor-pointer"
+                                    >
+                                      <span className="material-symbols-outlined text-[17px]">delete</span>
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {subLocation.places.map((place) => (
+                                      <span key={place} className="inline-flex items-center gap-1 rounded-full bg-surface-container-lowest px-2 py-1 text-[11px] text-on-surface-variant">
+                                        {place}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteFlatPlace(locName, subLocation.id, place)}
+                                          aria-label={`Hapus tempat ${place}`}
+                                          className="text-outline hover:text-error cursor-pointer"
+                                        >
+                                          <span className="material-symbols-outlined text-[13px]">close</span>
+                                        </button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <input
+                                      type="text"
+                                      value={newPlaceInputs[`flat:${locName}:${subLocation.id}`] || ''}
+                                      onChange={(event) => setNewPlaceInputs((previous) => ({
+                                        ...previous,
+                                        [`flat:${locName}:${subLocation.id}`]: event.target.value,
+                                      }))}
+                                      onKeyDown={(event) => event.key === 'Enter' && handleAddFlatPlace(locName, subLocation.id)}
+                                      placeholder="Tambah tempat di sub-lokasi"
+                                      className="min-w-0 flex-1 px-3 py-2 rounded-DEFAULT bg-surface-container-lowest border border-outline/20 text-on-surface font-body-sm outline-none focus:border-primary"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAddFlatPlace(locName, subLocation.id)}
+                                      className="px-3 py-2 rounded-DEFAULT bg-secondary-container text-on-secondary-container font-label-sm cursor-pointer"
+                                    >
+                                      Tambah Tempat
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={newSubLocationInputs[`flat:${locName}`] || ''}
+                                  onChange={(event) => setNewSubLocationInputs((previous) => ({
+                                    ...previous,
+                                    [`flat:${locName}`]: event.target.value,
+                                  }))}
+                                  onKeyDown={(event) => event.key === 'Enter' && handleAddFlatSubLocation(locName)}
+                                  placeholder="Tambah sub-lokasi"
+                                  className="min-w-0 flex-1 px-3 py-2 rounded-DEFAULT bg-surface-container-low border border-outline/20 text-on-surface font-body-sm outline-none focus:border-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddFlatSubLocation(locName)}
+                                  className="px-3 py-2 rounded-DEFAULT bg-secondary-container text-on-secondary-container font-label-sm cursor-pointer"
+                                >
+                                  Tambah Sub-Lokasi
+                                </button>
+                              </div>
                             </div>
                           </div>
                         ))
@@ -1883,6 +2080,38 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
           {/* RIGHT COLUMN: Reset Password Widget & Security Protocol (5 Cols) */}
           {/* ===================================================================== */}
           <div className="flex flex-col gap-6 xl:col-span-5">
+            <div className="p-5 rounded-DEFAULT bg-surface-container-lowest shadow-xs border border-outline-variant/30">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="font-label-md text-label-md text-on-surface font-bold">
+                    Input Sub-Lokasi Kerja Saat Pendaftaran
+                  </h3>
+                  <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">
+                    Jika aktif, staf wajib memilih satu sub-lokasi. PM yang menargetkan sub-lokasi hanya diterima staf
+                    dengan pilihan yang cocok.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={requireUserSubLocation}
+                  aria-label="Aktifkan input sub-lokasi kerja"
+                  onClick={() => handleSubLocationRequirementChange(!requireUserSubLocation)}
+                  className={`relative h-7 w-12 shrink-0 rounded-full transition-colors cursor-pointer ${
+                    requireUserSubLocation ? 'bg-primary' : 'bg-outline-variant'
+                  }`}
+                >
+                  <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    requireUserSubLocation ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+              {requireUserSubLocation && !hasConfiguredLocation && (
+                <p className="mt-3 text-xs font-medium text-error">
+                  Pastikan setiap lokasi memiliki minimal satu sub-lokasi sebelum membagikan tautan pendaftaran.
+                </p>
+              )}
+            </div>
             {/* PERMINTAAN RESET KATA SANDI CARD (Directly displayed matching design) */}
             <div
               className="p-6 rounded-DEFAULT bg-surface-container-lowest shadow-xs flex flex-col gap-5 border border-outline-variant/30"

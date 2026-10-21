@@ -159,6 +159,7 @@ interface UserDashboardProps {
     name?: string;
     role?: 'admin' | 'user';
     location?: string;
+    subLocation?: string;
     email?: string;
     portalAddress?: string;
     createdAt?: string;
@@ -174,6 +175,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
     name: '',
     role: 'user',
     location: '',
+    subLocation: '',
     email: '',
     portalAddress: '',
     createdAt: '',
@@ -205,7 +207,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
       return [];
     }
   });
-
   useEffect(() => {
     try {
       localStorage.setItem(notificationStorageKey, JSON.stringify(readProgressNotificationIds));
@@ -392,7 +393,16 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
         const savedDevicesById = new Map(savedDevices.map((device) => [String(device.id || ''), device]));
         const hasSavedDeviceSnapshot = Array.isArray(savedProgress?.devices);
         const assignedLocation = currentUser.location || job.targetWilayahList?.[0] || '';
-        const areaDetails = job.targetAreaDetails || [];
+        const areaDetails = (job.targetAreaDetails || [])
+          .filter((area) => normalizePlaceName(area.location) === normalizePlaceName(assignedLocation))
+          .map((area) => currentUser.subLocation
+            ? {
+                ...area,
+                subLocations: area.subLocations.filter((subLocation) =>
+                  normalizePlaceName(subLocation.name) === normalizePlaceName(currentUser.subLocation || '')
+                ),
+              }
+            : area);
         const configuredDevices: DeviceItem[] = (job.modules || []).flatMap((module, moduleIndex): DeviceItem[] => {
           const subtaskId = `${job.id}_subtask_${moduleIndex + 1}`;
           const checklistItems = module.checklist?.length
@@ -873,12 +883,17 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
   const activeSubtaskPointGroups = [...new Map(
     activeSubtaskDevices.map((device) => [device.pointId, activeSubtaskDevices.filter((item) => item.pointId === device.pointId)])
   ).values()];
+  const allJobPointGroups = [...new Map(
+    activeJob.devices.map((device) => [device.pointId, activeJob.devices.filter((item) => item.pointId === device.pointId)])
+  ).values()];
   const assignedLocationArea = activeJob.targetAreaDetails?.find((area) =>
     normalizePlaceName(area.location) === normalizePlaceName(currentUser.location || '')
   );
-  const assignedSubLocations = assignedLocationArea?.subLocations || [];
+  const assignedSubLocations = (assignedLocationArea?.subLocations || [])
+    .filter((subLocation) => !currentUser.subLocation
+      || normalizePlaceName(subLocation.name) === normalizePlaceName(currentUser.subLocation || ''));
   const selectedPlaceCounts = new Map<string, number>();
-  activeSubtaskPointGroups.forEach((pointDevices) => {
+  allJobPointGroups.forEach((pointDevices) => {
     const point = pointDevices[0];
     if (!point.subLocation || !point.place) return;
     const key = `${normalizePlaceName(point.subLocation)}::${normalizePlaceName(point.place)}`;
@@ -1332,6 +1347,9 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
             <Radio className="w-3.5 h-3.5 text-slate-500" />
             <span>
               Unit Operasi: <strong className="text-slate-900 font-semibold">{currentUser.location || 'Belum ditentukan'}</strong>
+              {currentUser.subLocation && (
+                <> · Sub-lokasi: <strong className="text-slate-900 font-semibold">{currentUser.subLocation}</strong></>
+              )}
             </span>
           </div>
         </div>
@@ -1361,6 +1379,12 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({
               aria-expanded={showProgressNotificationMenu}
               onClick={() => {
                 setShowProfileDropdown(false);
+                if (!showProgressNotificationMenu) {
+                  setReadProgressNotificationIds((previous) => Array.from(new Set([
+                    ...previous,
+                    ...progressNotifications.map((notification) => notification.id),
+                  ])));
+                }
                 setShowProgressNotificationMenu((open) => !open);
               }}
               className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50"

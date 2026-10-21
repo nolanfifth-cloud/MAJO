@@ -50,6 +50,7 @@ export default function App() {
     name?: string;
     role: 'admin' | 'user';
     location?: string;
+    subLocation?: string;
     email?: string;
     portalAddress?: string;
     createdAt?: string;
@@ -58,6 +59,7 @@ export default function App() {
     name: '',
     role: 'user',
     location: '',
+    subLocation: '',
     email: '',
     portalAddress: '',
     createdAt: '',
@@ -92,6 +94,7 @@ export default function App() {
           name: account.name,
           role: account.role,
           location: account.location,
+          subLocation: account.subLocation,
           email: account.email,
           portalAddress: account.portalAddress,
           createdAt: account.createdAt,
@@ -130,6 +133,7 @@ export default function App() {
       name: account.name,
       role: account.role,
       location: account.location,
+      subLocation: account.subLocation,
       email: account.email,
       portalAddress: account.portalAddress,
       createdAt: account.createdAt,
@@ -140,6 +144,7 @@ export default function App() {
       name: account.name,
       role: account.role,
       location: account.location,
+      subLocation: account.subLocation,
       portalAddress: account.portalAddress,
     }));
     if (account.portalAddress) {
@@ -154,6 +159,7 @@ export default function App() {
     name?: string;
     role: 'admin' | 'user';
     location?: string;
+    subLocation?: string;
     email?: string;
     portalAddress?: string;
     createdAt?: string;
@@ -170,7 +176,7 @@ export default function App() {
     localStorage.removeItem('majo_session');
     localStorage.removeItem('majo_active_portal_address');
     setAuthRestoreError('');
-    setCurrentUser({ username: '', name: '', role: 'user', location: '', email: '', portalAddress: '', createdAt: '' });
+    setCurrentUser({ username: '', name: '', role: 'user', location: '', subLocation: '', email: '', portalAddress: '', createdAt: '' });
     setCurrentView('login');
   };
 

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ChecklistItem, ConditionLogicRange, PmItem, RegionConfig } from '../types';
-import { getPortalConfig } from '../services/workflowStore';
+import { getPortalConfig, getSubLocationsForLocation } from '../services/workflowStore';
 import { loadPortalConfigFromFirestore } from '../services/firestoreStore';
 
 interface CreateJobsViewProps {
@@ -41,18 +41,28 @@ const toggleSetEntry = <T,>(current: Set<T>, entry: T): Set<T> => {
   return next;
 };
 
-const mapConfigToBranches = (config?: { masterWilayah?: string[]; masterGroups?: RegionConfig[] }): Branch[] => {
+const mapConfigToBranches = (config?: {
+  masterWilayah?: string[];
+  masterGroups?: RegionConfig[];
+  locationHierarchy?: RegionConfig['locationHierarchy'];
+}): Branch[] => {
   if (!config) return INITIAL_BRANCHES;
+  const groups = config.masterGroups || [];
+  const locations = Array.from(new Set([
+    ...(config.masterWilayah || []),
+    ...groups.flatMap((group) => group.locations),
+    ...Object.keys(config.locationHierarchy || {}),
+  ]));
 
-  const groups = config.masterGroups && config.masterGroups.length > 0
-    ? config.masterGroups
-    : config.masterWilayah && config.masterWilayah.length > 0
-      ? [{ id: 'default-region', name: 'Wilayah Utama', locations: config.masterWilayah }]
-      : [];
-
-  return groups.flatMap((group, groupIndex) =>
-    group.locations.map((location, locationIndex) => {
-      const subLocations = (group.locationHierarchy?.[location] || []).map((subLocation) => ({
+  return locations.map((location, locationIndex) => {
+      const groupIndex = Math.max(0, groups.findIndex((group) =>
+        group.locations.some((item) => item.toLowerCase() === location.toLowerCase())
+      ));
+      const group = groups[groupIndex];
+      const subLocations = getSubLocationsForLocation({
+        masterGroups: config.masterGroups || [],
+        locationHierarchy: config.locationHierarchy,
+      }, location).map((subLocation) => ({
         id: subLocation.id,
         name: subLocation.name,
         checked: true,
@@ -63,14 +73,13 @@ const mapConfigToBranches = (config?: { masterWilayah?: string[]; masterGroups?:
         })),
       }));
       return {
-        id: `${group.id || `group-${groupIndex}`}-${locationIndex}`,
+        id: `${group?.id || 'flat-location'}-${locationIndex}`,
         name: location,
         regionKey: `sor${Math.min(groupIndex + 1, 2)}` as 'sor1' | 'sor2',
         checked: true,
         subLocations,
       };
-    })
-  );
+  });
 };
 
 const hasBranchSelection = (branch: Branch) =>
@@ -229,7 +238,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
           places: subLocation.places.map((place) => ({ ...place, checked })),
         }
         : subLocation);
-      return { ...branch, checked: subLocations.every((subLocation) => subLocation.checked), subLocations };
+      return { ...branch, checked: false, subLocations };
     }));
   };
 
@@ -241,7 +250,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
         const places = subLocation.places.map((place) => place.id === placeId ? { ...place, checked } : place);
         return { ...subLocation, checked: places.length > 0 && places.every((place) => place.checked), places };
       });
-      return { ...branch, checked: subLocations.every((subLocation) => subLocation.checked), subLocations };
+      return { ...branch, checked: false, subLocations };
     }));
   };
 
@@ -572,7 +581,7 @@ export const CreateJobsView: React.FC<CreateJobsViewProps> = ({
       const selectedBranchNames = selectedBranches.map((branch) => branch.name);
       const targetAreaDetails = selectedBranches.map((branch) => ({
         location: branch.name,
-        subLocations: branch.subLocations
+        subLocations: branch.checked ? [] : branch.subLocations
           .filter((subLocation) => subLocation.checked || subLocation.places.some((place) => place.checked))
           .map((subLocation) => ({
             name: subLocation.name,

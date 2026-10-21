@@ -3,6 +3,8 @@ import { AuthView, UserRole, RegisteredAccount } from '../types';
 import {
   getPortalConfig,
   getPortalConfigForAddress,
+  getSubLocationsForLocation,
+  hasCompletePortalLocationHierarchy,
   normalizePortalAddress,
   savePortalConfig,
   setActivePortalAddress,
@@ -39,8 +41,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
   const [portalAddress, setPortalAddress] = useState('');
   const [adminInviteCode, setAdminInviteCode] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<string>(
-    portalConfig.masterWilayah[0] || 'Medan - Hub Operasional'
+    portalConfig.masterWilayah[0] || ''
   );
+  const [selectedSubLocation, setSelectedSubLocation] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -51,9 +54,14 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
     const locations = [
       ...portalConfig.masterWilayah,
       ...portalConfig.masterGroups.flatMap((group) => group.locations),
+      ...Object.keys(portalConfig.locationHierarchy || {}),
     ];
     return Array.from(new Set(locations.filter(Boolean)));
   }, [portalConfig]);
+  const availableSubLocations = useMemo(
+    () => getSubLocationsForLocation(portalConfig, selectedLocation),
+    [portalConfig, selectedLocation]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +95,12 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       setSelectedLocation(availableLocations[0]);
     }
   }, [availableLocations, selectedLocation]);
+
+  useEffect(() => {
+    if (selectedSubLocation && !availableSubLocations.some((item) => item.name === selectedSubLocation)) {
+      setSelectedSubLocation('');
+    }
+  }, [availableSubLocations, selectedSubLocation]);
 
   // Validation state for user portal link
   const isPortalValid = useMemo(() => {
@@ -129,6 +143,10 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         setErrorMsg('Harap pilih Wilayah tempat Anda bekerja.');
         return;
       }
+      if (portalConfig.requireUserSubLocation && !selectedSubLocation) {
+        setErrorMsg('Harap pilih sub-lokasi kerja Anda.');
+        return;
+      }
     } else if (!adminInviteCode.trim()) {
       setErrorMsg('Kode undangan dari admin yang sudah login wajib diisi.');
       return;
@@ -166,6 +184,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
 
     try {
       let verifiedPortalAddress = '';
+      let requiresSubLocation = role === 'user' && portalConfig.requireUserSubLocation;
       if (isFirebaseConfigured && role === 'admin') {
         await resolveAdminInvitation(adminInviteCode);
         const portalSlug = normalizePortalSlug(portalAddress);
@@ -178,16 +197,33 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
       }
       if (isFirebaseConfigured && role === 'user') {
         const portalSnapshot = await loadPortalConfigFromFirestore(normalizePortalAddress(portalAddress));
-        const configuredLocations = portalSnapshot?.masterWilayah || [];
+        const configuredLocations = [
+          ...(portalSnapshot?.masterWilayah || []),
+          ...(portalSnapshot?.masterGroups || []).flatMap((group) => group.locations),
+        ];
         if (!portalSnapshot || !portalSnapshot.isActivated) {
           setIsLoading(false);
           setErrorMsg('Portal tidak ditemukan atau belum diaktifkan. Periksa alamat portal dengan admin.');
           return;
         }
+        if (!hasCompletePortalLocationHierarchy(portalSnapshot)) {
+          setIsLoading(false);
+          setErrorMsg('Struktur portal sedang belum lengkap. Hubungi admin agar lokasi dan sub-lokasi diperiksa.');
+          return;
+        }
+        requiresSubLocation = Boolean(portalSnapshot.requireUserSubLocation);
         if (!configuredLocations.includes(selectedLocation)) {
           setIsLoading(false);
           setErrorMsg('Lokasi yang dipilih tidak terdaftar pada portal ini. Muat ulang pilihan lokasi atau hubungi admin.');
           return;
+        }
+        if (portalSnapshot.requireUserSubLocation) {
+          const configuredSubLocations = getSubLocationsForLocation(portalSnapshot, selectedLocation);
+          if (!selectedSubLocation || !configuredSubLocations.some((item) => item.name === selectedSubLocation)) {
+            setIsLoading(false);
+            setErrorMsg('Sub-lokasi yang dipilih tidak terdaftar pada portal ini. Muat ulang pilihan atau hubungi admin.');
+            return;
+          }
         }
         verifiedPortalAddress = normalizePortalAddress(portalSnapshot.portalAddress || portalAddress);
       }
@@ -204,6 +240,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         role,
         portalAddress: normalizedPortalAddress,
         location: role === 'user' ? selectedLocation : undefined,
+        subLocation: role === 'user' && requiresSubLocation ? selectedSubLocation : undefined,
         createdAt: new Date().toISOString(),
       };
 
@@ -311,7 +348,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                   {isFirebaseConfigured
                     ? 'Bergabung sebagai administrator pada portal yang ditentukan oleh kode undangan sekali pakai dari admin aktif.'
-                    : <>Membuat domain portal baru (<span className="font-mono text-blue-600 font-semibold">nama-kantor.majo.id</span>), mengatur skema wilayah operasional, membuat job assignment (PM), dan mengelola persetujuan akun staf.</>}
+                    : <>Membuat domain portal baru (<span className="font-mono text-blue-600 font-semibold">nama-kantor.majo.id</span>), mengatur struktur lokasi operasional, membuat job assignment (PM), dan mengelola persetujuan akun staf.</>}
                 </p>
               </div>
             </div>
@@ -610,7 +647,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                 )}
               </div>}
 
-              {/* 2. CHOOSE LOCATION (Khusus User: Single Wilayah Only, No Groups) */}
+              {/* 2. CHOOSE LOCATION */}
               {role === 'user' && (
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
@@ -618,7 +655,7 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                       htmlFor="reg-location"
                       className="text-xs font-bold text-slate-700 uppercase tracking-wider"
                     >
-                      CHOOSE LOCATION (WILAYAH KERJA)
+                      LOKASI KERJA
                     </label>
                     <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
                       Opsi Tunggal (Bukan Grup)
@@ -646,7 +683,45 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1 pl-3">
-                    Diambil langsung dari data master wilayah yang didaftarkan oleh Admin.
+                    Diambil dari lokasi operasional yang didaftarkan oleh Admin.
+                  </p>
+                </div>
+              )}
+
+              {role === 'user' && portalConfig.requireUserSubLocation && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label
+                      htmlFor="reg-sub-location"
+                      className="text-xs font-bold text-slate-700 uppercase tracking-wider"
+                    >
+                      SUB-LOKASI KERJA
+                    </label>
+                    <span className="text-[10px] font-semibold text-rose-500">Wajib Diisi</span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-4 text-slate-400 pointer-events-none">
+                      <span className="material-symbols-outlined text-[18px]">location_searching</span>
+                    </span>
+                    <select
+                      id="reg-sub-location"
+                      value={selectedSubLocation}
+                      disabled={!isPortalValid || availableSubLocations.length === 0}
+                      onChange={(event) => setSelectedSubLocation(event.target.value)}
+                      required
+                      className="w-full pl-11 pr-10 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-full text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all shadow-2xs appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Pilih sub-lokasi</option>
+                      {availableSubLocations.map((item) => (
+                        <option key={item.id} value={item.name}>{item.name}</option>
+                      ))}
+                    </select>
+                    <span className="absolute right-4 text-slate-400 pointer-events-none">
+                      <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 pl-3">
+                    Penugasan PM dengan sub-lokasi tertentu hanya diberikan kepada akun pada sub-lokasi yang sama.
                   </p>
                 </div>
               )}

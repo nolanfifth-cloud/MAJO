@@ -11,10 +11,14 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { PmItem, RegisteredAccount, RegionConfig } from '../types';
+import { PmItem, RegisteredAccount } from '../types';
 import { firebaseAuth, firebaseProjectId, firestore, isFirebaseConfigured } from './firebase';
 import {
   buildTargetAreaDetails,
+  getPortalLocationHierarchy,
+  getSubLocationsForLocation,
+  hasCompletePortalLocationHierarchy,
+  jobTargetsAccountLocation,
   PortalMasterConfig,
   getActivePortalAddress,
   normalizePortalAddress,
@@ -57,7 +61,16 @@ function omitUndefinedFields(value: Record<string, unknown>): Record<string, unk
 export async function loadPortalConfigFromFirestore(portalAddress?: string): Promise<PortalMasterConfig | null> {
   if (!isFirebaseConfigured || !firestore) return null;
   const snapshot = await getDoc(portalDoc(portalAddress));
-  return snapshot.exists() ? (snapshot.data() as PortalMasterConfig) : null;
+  if (!snapshot.exists()) return null;
+  const config = snapshot.data() as PortalMasterConfig;
+  const locationHierarchy = getPortalLocationHierarchy(config);
+  return {
+    ...config,
+    locationHierarchy,
+    locationSubLocations: Object.fromEntries(Object.entries(locationHierarchy)
+      .map(([location, subLocations]) => [location, subLocations.map((item) => item.name)])),
+    requireUserSubLocation: Boolean(config.requireUserSubLocation),
+  };
 }
 
 export async function savePortalConfigToFirestore(config: PortalMasterConfig): Promise<void> {
@@ -65,6 +78,10 @@ export async function savePortalConfigToFirestore(config: PortalMasterConfig): P
   const address = normalizePortalAddress(config.portalAddress || getActivePortalAddress() || 'portal');
   await setDoc(portalDoc(address), {
     ...config,
+    locationHierarchy: getPortalLocationHierarchy(config),
+    locationSubLocations: Object.fromEntries(Object.entries(getPortalLocationHierarchy(config))
+      .map(([location, subLocations]) => [location, subLocations.map((item) => item.name)])),
+    requireUserSubLocation: Boolean(config.requireUserSubLocation),
     portalAddress: address,
     portalLink: normalizePortalAddress(config.portalLink || config.portalAddress || address) || address,
   }, { merge: true });
@@ -105,6 +122,7 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
   const profile = profileSnapshot.data();
   const portalId = normalizePortalAddress(String(profile?.portalAddress || ''));
   const location = String(profile?.location || '');
+  const subLocation = String(profile?.subLocation || '');
   if (!profileSnapshot.exists()) {
     throw new Error(`Profil user tidak ditemukan di proyek "${firebaseProjectId}".`);
   }
@@ -137,7 +155,8 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
       const data = assignment.data();
       return data.userUid === authenticatedUid
         && normalizePortalAddress(String(data.portalId || '')) === portalId
-        && data.location === location;
+        && data.location === location
+        && String(data.subLocation || '') === subLocation;
     })
     .map((assignment) => assignment.id);
   const jobs: (PmItem | null)[] = await Promise.all(assignedJobIds.map(async (jobId) => {
@@ -151,7 +170,7 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
       const job = jobSnapshot.data() as PmItem;
       if (
         normalizePortalAddress(String(job.portalId || '')) !== portalId
-        || !job.targetWilayahList?.includes(location)
+        || !jobTargetsAccountLocation(job, location, subLocation || undefined)
       ) {
         throw new Error('portal atau lokasi pada PM tidak lagi cocok dengan penugasannya');
       }
@@ -161,7 +180,11 @@ export async function loadJobsForUserFromFirestore(): Promise<PmItem[]> {
         portalId,
         targetAreaDetails: job.targetAreaDetails?.length
           ? job.targetAreaDetails
-          : buildTargetAreaDetails(job.targetWilayahList || [], portalConfig?.masterGroups || []),
+          : buildTargetAreaDetails(
+              job.targetWilayahList || [],
+              portalConfig?.masterGroups || [],
+              portalConfig?.locationHierarchy
+            ),
       };
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error
@@ -301,10 +324,38 @@ export async function saveAdminJobToFirestore(
   if (!isFirebaseConfigured || !database) return null;
   if (!adminUid || !portalId) throw new Error('Sesi admin atau alamat portal tidak tersedia.');
   const normalizedPortalId = normalizePortalAddress(portalId);
-  const targetLocations = new Set(job.targetWilayahList || []);
+  const portalConfig = await loadPortalConfigFromFirestore(normalizedPortalId);
+  const targetAreaDetails = job.targetAreaDetails || [];
+  const targetSubLocationsByLocation = job.targetSubLocationsByLocation
+    ?? Object.fromEntries(targetAreaDetails.map((area) => [
+        area.location,
+        area.subLocations.map((subLocation) => subLocation.name),
+      ]));
+  const jobWithTargets: PmItem = {
+    ...job,
+    targetAreaDetails: targetAreaDetails.map((area) => {
+      if (area.subLocations.length > 0) return area;
+      return {
+        ...area,
+        subLocations: getSubLocationsForLocation(portalConfig || {
+          masterGroups: [],
+          locationHierarchy: {},
+        }, area.location).map((subLocation) => ({
+          name: subLocation.name,
+          places: [...subLocation.places],
+        })),
+      };
+    }),
+    targetSubLocationsByLocation,
+  };
   const assignedAccounts = await loadRegisteredAccountsFromFirestore(normalizedPortalId);
   const targetUserUids = assignedAccounts
-    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
+    .filter((account) =>
+      account.role === 'user'
+      && account.uid
+      && account.location
+      && jobTargetsAccountLocation(jobWithTargets, account.location, account.subLocation)
+    )
     .map((account) => account.uid as string);
   const jobRef = doc(database, 'jobs', job.id);
   const existingJobSnapshot = mode === 'update' ? await getDoc(jobRef) : null;
@@ -322,8 +373,11 @@ export async function saveAdminJobToFirestore(
       ? { createdBy: existingJob.createdBy }
       : {}
     : {};
+  const previouslyAssignedUserUids = Array.isArray(existingJob?.targetUserUids)
+    ? existingJob.targetUserUids.filter((uid): uid is string => typeof uid === 'string')
+    : [];
   await setDoc(jobRef, {
-    ...job,
+    ...jobWithTargets,
     portalId: normalizedPortalId,
     targetUserUids,
     createdAt: typeof existingJob?.createdAt === 'string'
@@ -332,9 +386,10 @@ export async function saveAdminJobToFirestore(
     ...creatorMetadata,
   });
   const savedJob = {
-    ...job,
+    ...jobWithTargets,
     portalId: normalizedPortalId,
     createdBy: String(creatorMetadata.createdBy || adminUid),
+    targetUserUids: previouslyAssignedUserUids,
   };
   await assignExistingAdminJobToUsers(savedJob, adminUid, assignedAccounts);
   return normalizedPortalId;
@@ -347,10 +402,15 @@ export async function assignExistingAdminJobToUsers(
 ): Promise<void> {
   const database = firestore;
   if (!isFirebaseConfigured || !database || !job.id || !adminUid || job.createdBy !== adminUid) return;
-  const targetLocations = new Set(job.targetWilayahList || []);
   const targetUserUids = accounts
-    .filter((account) => account.role === 'user' && account.uid && account.location && targetLocations.has(account.location))
+    .filter((account) =>
+      account.role === 'user'
+      && account.uid
+      && account.location
+      && jobTargetsAccountLocation(job, account.location, account.subLocation)
+    )
     .map((account) => account.uid as string);
+  const staleUserUids = (job.targetUserUids || []).filter((uid) => !targetUserUids.includes(uid));
   await updateDoc(doc(database, 'jobs', job.id), { targetUserUids });
 
   const recipients = new Map(
@@ -359,7 +419,7 @@ export async function assignExistingAdminJobToUsers(
         account.role === 'user'
         && account.uid
         && account.location
-        && targetLocations.has(account.location)
+        && jobTargetsAccountLocation(job, account.location, account.subLocation)
       )
       .map((account) => [account.uid as string, account])
   );
@@ -369,9 +429,17 @@ export async function assignExistingAdminJobToUsers(
       jobId: job.id,
       userUid,
       location: account.location,
+      subLocation: account.subLocation || '',
       portalId: normalizePortalAddress(job.portalId || ''),
       createdBy: adminUid,
     });
+  }));
+  await Promise.all(staleUserUids.map(async (userUid) => {
+    const assignmentRef = doc(database, 'users', userUid, 'jobAssignments', job.id);
+    const assignmentSnapshot = await getDoc(assignmentRef);
+    if (assignmentSnapshot.exists() && assignmentSnapshot.data().createdBy === adminUid) {
+      await deleteDoc(assignmentRef);
+    }
   }));
 }
 
@@ -388,11 +456,10 @@ export async function deleteAdminJobFromFirestore(job: PmItem, portalId?: string
     throw new Error('Pekerjaan ini bukan bagian dari portal admin yang sedang aktif.');
   }
 
-  const targetLocations = new Set(job.targetWilayahList || []);
   const accounts = await loadRegisteredAccountsFromFirestore(activePortalId);
   const recipientUids = new Set(job.targetUserUids || []);
   accounts.forEach((account) => {
-    if (account.uid && account.location && targetLocations.has(account.location)) {
+    if (account.uid && account.location && jobTargetsAccountLocation(job, account.location, account.subLocation)) {
       recipientUids.add(account.uid);
     }
   });
@@ -561,5 +628,5 @@ export function subscribeToCompletedReportsForUserFromFirestore(
 }
 
 export function hasRealPortalLocation(config: PortalMasterConfig): boolean {
-  return config.masterWilayah.length > 0 || config.masterGroups.some((region: RegionConfig) => region.locations.length > 0);
+  return hasCompletePortalLocationHierarchy(config);
 }

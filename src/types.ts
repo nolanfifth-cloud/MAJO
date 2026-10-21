@@ -12,6 +12,7 @@ export interface RegisteredAccount {
   portalAddress: string;
   portalId?: string;
   location?: string;
+  subLocation?: string;
   createdAt: string;
 }
 
@@ -84,6 +85,7 @@ export interface PmItem {
       places: string[];
     }>;
   }>;
+  targetSubLocationsByLocation?: Record<string, string[]>;
   targetGroupIds?: string[];
 }
 

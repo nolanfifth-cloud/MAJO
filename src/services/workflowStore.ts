@@ -191,11 +191,84 @@ export interface PortalMasterConfig {
   isActivated: boolean;
   masterWilayah: string[];
   masterGroups: RegionConfig[];
+  locationHierarchy?: NonNullable<RegionConfig['locationHierarchy']>;
+  locationSubLocations?: Record<string, string[]>;
+  requireUserSubLocation?: boolean;
+}
+
+export function getPortalLocationHierarchy(config: Pick<PortalMasterConfig, 'masterGroups' | 'locationHierarchy'>): NonNullable<RegionConfig['locationHierarchy']> {
+  const hierarchy: NonNullable<RegionConfig['locationHierarchy']> = {};
+  const addEntries = (source?: RegionConfig['locationHierarchy']) => {
+    Object.entries(source || {}).forEach(([location, subLocations]) => {
+      const existing = hierarchy[location] || [];
+      (subLocations || []).forEach((subLocation) => {
+        const existingSubLocation = existing.find((item) => item.name.toLowerCase() === subLocation.name.toLowerCase());
+        if (existingSubLocation) {
+          (subLocation.places || []).forEach((place) => {
+            if (!existingSubLocation.places.some((item) => item.toLowerCase() === place.toLowerCase())) {
+              existingSubLocation.places.push(place);
+            }
+          });
+        } else {
+          existing.push({
+            ...subLocation,
+            places: [...(subLocation.places || [])],
+          });
+        }
+      });
+      hierarchy[location] = existing;
+    });
+  };
+
+  addEntries(config.locationHierarchy);
+  (Array.isArray(config.masterGroups) ? config.masterGroups : [])
+    .forEach((group) => addEntries(group.locationHierarchy));
+  return hierarchy;
+}
+
+export function getSubLocationsForLocation(
+  config: Pick<PortalMasterConfig, 'masterGroups' | 'locationHierarchy'>,
+  location: string
+) {
+  const entry = Object.entries(getPortalLocationHierarchy(config))
+    .find(([name]) => name.toLowerCase() === location.toLowerCase());
+  return entry?.[1] || [];
+}
+
+export function hasCompletePortalLocationHierarchy(
+  config: Pick<PortalMasterConfig, 'masterWilayah' | 'masterGroups' | 'locationHierarchy' | 'requireUserSubLocation'>
+): boolean {
+  const locations = Array.from(new Set([
+    ...(Array.isArray(config.masterWilayah) ? config.masterWilayah : []),
+    ...(Array.isArray(config.masterGroups) ? config.masterGroups : []).flatMap((group) => group.locations || []),
+  ]));
+  if (locations.length === 0) return false;
+  return !config.requireUserSubLocation
+    || locations.every((location) => getSubLocationsForLocation(config, location).length > 0);
+}
+
+export function jobTargetsAccountLocation(
+  job: Pick<PmItem, 'targetWilayahList' | 'targetAreaDetails' | 'targetSubLocationsByLocation'>,
+  location: string,
+  subLocation?: string
+): boolean {
+  if (!(job.targetWilayahList || []).some((item) => item.toLowerCase() === location.toLowerCase())) return false;
+  if (!job.targetSubLocationsByLocation && !subLocation) return true;
+  const mappedSubLocations = job.targetSubLocationsByLocation
+    ? Object.entries(job.targetSubLocationsByLocation)
+        .find(([name]) => name.toLowerCase() === location.toLowerCase())?.[1] || []
+    : undefined;
+  const area = (job.targetAreaDetails || [])
+    .find((item) => item.location.toLowerCase() === location.toLowerCase());
+  const targetSubLocations = mappedSubLocations ?? area?.subLocations.map((item) => item.name);
+  if (!targetSubLocations?.length) return true;
+  return Boolean(subLocation && targetSubLocations.some((name) => name.toLowerCase() === subLocation.toLowerCase()));
 }
 
 export function buildTargetAreaDetails(
   selectedRegions: string[],
-  masterGroups: RegionConfig[]
+  masterGroups: RegionConfig[],
+  locationHierarchy?: PortalMasterConfig['locationHierarchy']
 ): NonNullable<PmItem['targetAreaDetails']> {
   const areas = new Map<string, NonNullable<PmItem['targetAreaDetails']>[number]>();
   selectedRegions.forEach((selectedRegion) => {
@@ -203,7 +276,11 @@ export function buildTargetAreaDetails(
     const locations = group?.locations || [selectedRegion];
     locations.forEach((location) => {
       const locationGroup = group || masterGroups.find((item) => item.locations.includes(location));
-      const subLocations = locationGroup?.locationHierarchy?.[location] || [];
+      const groupSubLocations = Object.entries(locationGroup?.locationHierarchy || {})
+        .find(([name]) => name.toLowerCase() === location.toLowerCase())?.[1];
+      const flatSubLocations = Object.entries(locationHierarchy || {})
+        .find(([name]) => name.toLowerCase() === location.toLowerCase())?.[1];
+      const subLocations = groupSubLocations?.length ? groupSubLocations : flatSubLocations || [];
       const key = location.toLowerCase();
       if (!areas.has(key)) {
         areas.set(key, {
@@ -314,6 +391,15 @@ export function getPortalConfigForAddress(portalAddress?: string): PortalMasterC
         isActivated: Boolean(parsed.isActivated),
         masterWilayah: Array.isArray(parsed.masterWilayah) ? parsed.masterWilayah : [],
         masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+        locationHierarchy: getPortalLocationHierarchy({
+          masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+          locationHierarchy: parsed.locationHierarchy,
+        }),
+        locationSubLocations: Object.fromEntries(Object.entries(getPortalLocationHierarchy({
+          masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+          locationHierarchy: parsed.locationHierarchy,
+        })).map(([location, subLocations]) => [location, subLocations.map((item) => item.name)])),
+        requireUserSubLocation: Boolean(parsed.requireUserSubLocation),
       };
     }
 
@@ -328,6 +414,15 @@ export function getPortalConfigForAddress(portalAddress?: string): PortalMasterC
           isActivated: Boolean(parsed.isActivated),
           masterWilayah: Array.isArray(parsed.masterWilayah) ? parsed.masterWilayah : [],
           masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+          locationHierarchy: getPortalLocationHierarchy({
+            masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+            locationHierarchy: parsed.locationHierarchy,
+          }),
+          locationSubLocations: Object.fromEntries(Object.entries(getPortalLocationHierarchy({
+            masterGroups: Array.isArray(parsed.masterGroups) ? parsed.masterGroups : [],
+            locationHierarchy: parsed.locationHierarchy,
+          })).map(([location, subLocations]) => [location, subLocations.map((item) => item.name)])),
+          requireUserSubLocation: Boolean(parsed.requireUserSubLocation),
         };
       }
     }
@@ -341,6 +436,9 @@ export function getPortalConfigForAddress(portalAddress?: string): PortalMasterC
     isActivated: false,
     masterWilayah: INITIAL_MASTER_WILAYAH,
     masterGroups: INITIAL_MASTER_GROUPS,
+    locationHierarchy: {},
+    locationSubLocations: {},
+    requireUserSubLocation: false,
   };
 }
 
@@ -364,6 +462,10 @@ export function savePortalConfig(config: PortalMasterConfig, portalAddressOverri
     isActivated: Boolean(config.isActivated),
     masterWilayah: Array.isArray(config.masterWilayah) ? config.masterWilayah : [],
     masterGroups: Array.isArray(config.masterGroups) ? config.masterGroups : [],
+    locationHierarchy: getPortalLocationHierarchy(config),
+    locationSubLocations: Object.fromEntries(Object.entries(getPortalLocationHierarchy(config))
+      .map(([location, subLocations]) => [location, subLocations.map((item) => item.name)])),
+    requireUserSubLocation: Boolean(config.requireUserSubLocation),
   };
   try {
     const identity = getCurrentSessionIdentity();

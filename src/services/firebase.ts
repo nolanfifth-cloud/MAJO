@@ -246,6 +246,7 @@ export async function registerAccountWithFirebase(
     portalAddress: account.portalAddress,
     ...(account.portalId ? { portalId: account.portalId } : {}),
     ...(account.location ? { location: account.location } : {}),
+    ...(account.subLocation ? { subLocation: account.subLocation } : {}),
     createdAt: account.createdAt,
   };
 
@@ -355,6 +356,7 @@ export async function loginWithFirebase(
     role,
     portalAddress: accountPortalAddress,
     location: profile.location as string | undefined,
+    subLocation: profile.subLocation as string | undefined,
     createdAt: (profile.createdAt as string) || new Date().toISOString(),
   };
 }
@@ -371,6 +373,7 @@ export async function getRegisteredAccountForFirebaseUser(user: User): Promise<R
     role: (profile.role as 'admin' | 'user') || 'admin',
     portalAddress: (profile.portalAddress as string) || '',
     location: profile.location as string | undefined,
+    subLocation: profile.subLocation as string | undefined,
     createdAt: (profile.createdAt as string) || new Date().toISOString(),
   };
 }
