@@ -344,9 +344,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   const handleSavePortal = () => {
     if (!hasConfiguredLocation) {
       setIsPortalActivated(false);
-      showToast(requireUserSubLocation
-        ? 'Belum dapat diaktifkan. Setiap lokasi harus memiliki minimal satu sub-lokasi kerja terlebih dahulu.'
-        : 'Belum dapat diaktifkan. Tambahkan minimal 1 lokasi operasional terlebih dahulu.', 'info');
+      showToast('Belum dapat diaktifkan. Tambahkan minimal 1 lokasi operasional terlebih dahulu.', 'info');
       return;
     }
     setIsSaving(true);
@@ -366,8 +364,7 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
   };
 
   const handleSubLocationRequirementChange = (enabled: boolean) => {
-    const hasSubLocations = Object.values(locationHierarchy).some((items) => items.length > 0);
-    const nextActivated = enabled && !hasSubLocations ? false : isPortalActivated;
+    const nextActivated = isPortalActivated;
     setRequireUserSubLocation(enabled);
     setIsPortalActivated(nextActivated);
     void persistPortalConfigSnapshot(
@@ -2087,8 +2084,8 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                     Input Sub-Lokasi Kerja Saat Pendaftaran
                   </h3>
                   <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">
-                    Jika aktif, staf wajib memilih satu sub-lokasi. PM yang menargetkan sub-lokasi hanya diterima staf
-                    dengan pilihan yang cocok.
+                    Jika lokasi memiliki sub-lokasi, staf memilih salah satunya. Lokasi tanpa sub-lokasi tetap bisa
+                    digunakan untuk pendaftaran; penugasan spesifik sub-lokasi hanya diterima staf yang cocok.
                   </p>
                 </div>
                 <button
@@ -2106,9 +2103,9 @@ export const LinkPortalView: React.FC<LinkPortalViewProps> = ({
                   }`} />
                 </button>
               </div>
-              {requireUserSubLocation && !hasConfiguredLocation && (
-                <p className="mt-3 text-xs font-medium text-error">
-                  Pastikan setiap lokasi memiliki minimal satu sub-lokasi sebelum membagikan tautan pendaftaran.
+              {requireUserSubLocation && masterLocations.length > 0 && !Object.values(locationHierarchy).some((items) => items.length > 0) && (
+                <p className="mt-3 text-xs font-medium text-on-surface-variant">
+                  Belum ada sub-lokasi. Pengguna pada semua lokasi dapat mendaftar tanpa sub-lokasi sampai admin menambahkan opsinya.
                 </p>
               )}
             </div>

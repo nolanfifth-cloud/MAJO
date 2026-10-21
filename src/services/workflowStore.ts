@@ -243,8 +243,7 @@ export function hasCompletePortalLocationHierarchy(
     ...(Array.isArray(config.masterGroups) ? config.masterGroups : []).flatMap((group) => group.locations || []),
   ]));
   if (locations.length === 0) return false;
-  return !config.requireUserSubLocation
-    || locations.every((location) => getSubLocationsForLocation(config, location).length > 0);
+  return true;
 }
 
 export function jobTargetsAccountLocation(

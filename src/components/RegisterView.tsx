@@ -143,7 +143,11 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         setErrorMsg('Harap pilih Wilayah tempat Anda bekerja.');
         return;
       }
-      if (portalConfig.requireUserSubLocation && !selectedSubLocation) {
+      if (
+        portalConfig.requireUserSubLocation
+        && availableSubLocations.length > 0
+        && !selectedSubLocation
+      ) {
         setErrorMsg('Harap pilih sub-lokasi kerja Anda.');
         return;
       }
@@ -219,7 +223,10 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         }
         if (portalSnapshot.requireUserSubLocation) {
           const configuredSubLocations = getSubLocationsForLocation(portalSnapshot, selectedLocation);
-          if (!selectedSubLocation || !configuredSubLocations.some((item) => item.name === selectedSubLocation)) {
+          if (
+            configuredSubLocations.length > 0
+            && (!selectedSubLocation || !configuredSubLocations.some((item) => item.name === selectedSubLocation))
+          ) {
             setIsLoading(false);
             setErrorMsg('Sub-lokasi yang dipilih tidak terdaftar pada portal ini. Muat ulang pilihan atau hubungi admin.');
             return;
@@ -240,7 +247,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
         role,
         portalAddress: normalizedPortalAddress,
         location: role === 'user' ? selectedLocation : undefined,
-        subLocation: role === 'user' && requiresSubLocation ? selectedSubLocation : undefined,
+        subLocation: role === 'user' && requiresSubLocation && selectedSubLocation
+          ? selectedSubLocation
+          : undefined,
         createdAt: new Date().toISOString(),
       };
 
@@ -697,7 +706,11 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     >
                       SUB-LOKASI KERJA
                     </label>
-                    <span className="text-[10px] font-semibold text-rose-500">Wajib Diisi</span>
+                    <span className={`text-[10px] font-semibold ${
+                      availableSubLocations.length > 0 ? 'text-rose-500' : 'text-slate-400'
+                    }`}>
+                      {availableSubLocations.length > 0 ? 'Wajib Diisi' : 'Opsional — lokasi ini tidak memiliki sub-lokasi'}
+                    </span>
                   </div>
                   <div className="relative flex items-center">
                     <span className="absolute left-4 text-slate-400 pointer-events-none">
@@ -708,10 +721,12 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                       value={selectedSubLocation}
                       disabled={!isPortalValid || availableSubLocations.length === 0}
                       onChange={(event) => setSelectedSubLocation(event.target.value)}
-                      required
+                      required={availableSubLocations.length > 0}
                       className="w-full pl-11 pr-10 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-full text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all shadow-2xs appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <option value="">Pilih sub-lokasi</option>
+                      <option value="">
+                        {availableSubLocations.length > 0 ? 'Pilih sub-lokasi' : 'Tidak ada sub-lokasi untuk lokasi ini'}
+                      </option>
                       {availableSubLocations.map((item) => (
                         <option key={item.id} value={item.name}>{item.name}</option>
                       ))}
@@ -721,7 +736,9 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1 pl-3">
-                    Penugasan PM dengan sub-lokasi tertentu hanya diberikan kepada akun pada sub-lokasi yang sama.
+                    {availableSubLocations.length > 0
+                      ? 'Pilih sub-lokasi kerja Anda. Penugasan PM dengan sub-lokasi tertentu hanya diberikan kepada akun yang cocok.'
+                      : 'Admin belum menetapkan sub-lokasi untuk lokasi ini. Anda tetap dapat mendaftar tanpa memilih sub-lokasi.'}
                   </p>
                 </div>
               )}

@@ -100,6 +100,15 @@ service cloud.firestore {
         && subLocations.hasAny([subLocation]);
     }
 
+    function portalHasSubLocations(portalId, location) {
+      let configPath = /databases/$(database)/documents/appConfig/$(portalId);
+      let subLocationsByLocation = get(configPath).data.get('locationSubLocations', {});
+      let subLocations = subLocationsByLocation.get(location, []);
+      return exists(configPath)
+        && subLocations is list
+        && subLocations.size() > 0;
+    }
+
     function userIsAssignedToJob(portalId, jobId, location, subLocation) {
       let jobPath = /databases/$(database)/documents/jobs/$(jobId);
       return exists(jobPath)
@@ -185,12 +194,13 @@ service cloud.firestore {
             && request.resource.data.location is string
             && portalHasLocation(request.resource.data.portalAddress, request.resource.data.location)
             && (!portalRequiresSubLocation(request.resource.data.portalAddress)
+              || !portalHasSubLocations(
+                request.resource.data.portalAddress,
+                request.resource.data.location
+              )
               || (request.resource.data.subLocation is string
-                && portalHasSubLocation(
-                  request.resource.data.portalAddress,
-                  request.resource.data.location,
-                  request.resource.data.subLocation
-                )))
+                && portalHasSubLocation(request.resource.data.portalAddress,
+                  request.resource.data.location, request.resource.data.subLocation)))
             && (request.resource.data.get('subLocation', '') == ''
               || portalHasSubLocation(
                 request.resource.data.portalAddress,

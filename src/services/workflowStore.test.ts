@@ -116,7 +116,7 @@ test('target area details use the flat hierarchy when no region group contains t
   );
 });
 
-test('portal readiness requires a sub-location for every configured location when selection is mandatory', () => {
+test('portal readiness does not require sub-locations when some locations have none', () => {
   const config = {
     masterWilayah: ['Medan', 'Jakarta'],
     masterGroups: [],
@@ -125,7 +125,7 @@ test('portal readiness requires a sub-location for every configured location whe
       Medan: [{ id: 'hub', name: 'Hub', places: [] }],
     },
   };
-  assert.equal(hasCompletePortalLocationHierarchy(config), false);
+  assert.equal(hasCompletePortalLocationHierarchy(config), true);
   assert.equal(hasCompletePortalLocationHierarchy({
     ...config,
     locationHierarchy: {
@@ -133,4 +133,9 @@ test('portal readiness requires a sub-location for every configured location whe
       Jakarta: [{ id: 'server-room', name: 'Ruang Server', places: [] }],
     },
   }), true);
+  assert.equal(hasCompletePortalLocationHierarchy({
+    masterWilayah: [],
+    masterGroups: [],
+    requireUserSubLocation: true,
+  }), false);
 });
